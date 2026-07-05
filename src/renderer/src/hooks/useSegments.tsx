@@ -361,6 +361,8 @@ function useSegments({ filePath, workingRef, setWorking, setProgress, videoStrea
   }, [currentCutSegOrWholeTimeline, deleteCurrentCutSeg, fileDuration, filePath, loadCutSegments, videoStream]);
 
   const removeSegments = useCallback((removeSegmentIds: string[]) => {
+    if (removeSegmentIds.length === 0) return;
+
     safeSetCutSegments((existingSegments) => {
       const newSegments = existingSegments.filter((seg) => !removeSegmentIds.includes(seg.segId));
       if (newSegments.length === 0) {
@@ -682,31 +684,67 @@ function useSegments({ filePath, workingRef, setWorking, setProgress, videoStrea
     selectSegments(findSegmentsAtCursor(relevantTime).flatMap((index) => (cutSegments[index] ? [cutSegments[index]] : [])));
   }, [cutSegments, findSegmentsAtCursor, getRelevantTime, selectSegments]);
 
-  const splitCurrentSegment = useCallback(() => {
-    const relevantTime = getRelevantTime();
-    const segmentsAtCursorIndexes = findSegmentsAtCursor(relevantTime);
+  const splitCurrentSegment = useCallback((time?: number) => {
+    if (!checkFileOpened()) return;
 
-    const firstSegmentAtCursorIndex = segmentsAtCursorIndexes[0];
+    const relevantTime = Math.min(Math.max(time ?? getRelevantTime(), 0), fileDurationNonZero);
+    const timeEpsilon = Math.max(fileDurationNonZero / 1_000_000, 0.001);
 
-    if (firstSegmentAtCursorIndex == null) {
-      errorToast(i18n.t('No segment to split. Please move cursor over the segment you want to split'));
+    const splitSegment = (segment: StateSegment, segmentIndex: number, segmentEnd: number) => {
+      const getNewName = (oldName: string, suffix: string) => oldName && `${segment.name} ${suffix}`;
+
+      if (relevantTime <= segment.start + timeEpsilon || relevantTime >= segmentEnd - timeEpsilon) return;
+
+      const firstPart = createIndexedSegment({ segment: { name: getNewName(segment.name, '1'), start: segment.start, end: relevantTime }, incrementCount: false });
+      const secondPart = createIndexedSegment({ segment: { name: getNewName(segment.name, '2'), start: relevantTime, end: segmentEnd }, incrementCount: true });
+
+      const newSegments = [...cutSegments];
+      newSegments.splice(segmentIndex, 1, firstPart, secondPart);
+      safeSetCutSegments(newSegments, fileDuration);
+      setCurrentSegIndex(segmentIndex + 1);
+    };
+
+    const segmentAtCursor = cutSegments.flatMap((segment, index) => {
+      const segmentEnd = segment.end;
+      if (segmentEnd == null) return [];
+      if (segment.start - timeEpsilon <= relevantTime && segmentEnd + timeEpsilon >= relevantTime) return [{ segment, index, segmentEnd }];
+      return [];
+    }).reverse()[0];
+
+    if (segmentAtCursor != null) {
+      splitSegment(segmentAtCursor.segment, segmentAtCursor.index, segmentAtCursor.segmentEnd);
       return;
     }
 
-    const segment = cutSegments[firstSegmentAtCursorIndex];
-    invariant(segment != null);
+    // New timeline behavior: split the unclaimed timeline interval too, so the playhead can create a cut on the media lane.
+    const sortedSegments = cutSegments.flatMap((segment, index) => (segment.end != null ? [{ segment, index, segmentEnd: segment.end }] : []))
+      .sort((a, b) => a.segment.start - b.segment.start);
 
-    const getNewName = (oldName: string, suffix: string) => oldName && `${segment.name} ${suffix}`;
+    let gapStart = 0;
+    let gapEnd = fileDurationNonZero;
+    let insertIndex = cutSegments.length;
 
-    if (segment.start === relevantTime || segment.end === relevantTime) return; // No point
+    for (const { segment, index, segmentEnd } of sortedSegments) {
+      if (relevantTime < segment.start - timeEpsilon) {
+        gapEnd = segment.start;
+        insertIndex = index;
+        break;
+      }
+      gapStart = Math.max(gapStart, segmentEnd);
+    }
 
-    const firstPart = createIndexedSegment({ segment: { name: getNewName(segment.name, '1'), start: segment.start, end: relevantTime }, incrementCount: false });
-    const secondPart = createIndexedSegment({ segment: { name: getNewName(segment.name, '2'), start: relevantTime, end: segment.end }, incrementCount: true });
+    if (relevantTime > gapStart + timeEpsilon && relevantTime < gapEnd - timeEpsilon) {
+      const firstPart = createIndexedSegment({ segment: { start: gapStart, end: relevantTime }, incrementCount: false });
+      const secondPart = createIndexedSegment({ segment: { start: relevantTime, end: gapEnd }, incrementCount: true });
+      const newSegments = [...cutSegments];
+      newSegments.splice(insertIndex, 0, firstPart, secondPart);
+      safeSetCutSegments(newSegments, fileDuration);
+      setCurrentSegIndex(insertIndex + 1);
+      return;
+    }
 
-    const newSegments = [...cutSegments];
-    newSegments.splice(firstSegmentAtCursorIndex, 1, firstPart, secondPart);
-    safeSetCutSegments(newSegments);
-  }, [createIndexedSegment, cutSegments, findSegmentsAtCursor, getRelevantTime, safeSetCutSegments]);
+    errorToast(i18n.t('No segment to split. Please move cursor over the segment you want to split'));
+  }, [checkFileOpened, createIndexedSegment, cutSegments, fileDuration, fileDurationNonZero, getRelevantTime, safeSetCutSegments, setCurrentSegIndex]);
 
   const createNumSegments = useCallback(async () => {
     if (!checkFileOpened() || currentCutSegOrWholeTimeline.duration <= 0) return;
@@ -967,6 +1005,7 @@ function useSegments({ filePath, workingRef, setWorking, setProgress, videoStrea
     detectBlackScenes,
     detectSilentScenes,
     detectSceneChanges,
+    removeSegments,
     removeSegment,
     invertAllSegments,
     fillSegmentsGaps,

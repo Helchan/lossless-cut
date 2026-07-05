@@ -25,6 +25,7 @@ function BetweenSegments({ start, end, fileDurationNonZero, invertCutSegments }:
         display: 'flex',
         alignItems: 'center',
         pointerEvents: 'none',
+        zIndex: 3,
       }}
       initial={{
         left,

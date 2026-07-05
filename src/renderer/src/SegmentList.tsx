@@ -479,7 +479,7 @@ function SegmentList({
             title={actionTitle(t('Split segment at cursor'), 'splitCurrentSegment')}
             role="button"
             style={{ ...buttonBaseStyle, padding: 1, ...(firstSegmentAtCursor ? { backgroundColor: segAtCursorColor } : disabledButtonStyle) }}
-            onClick={splitCurrentSegment}
+            onClick={() => splitCurrentSegment()}
           />
 
           {!invertCutSegments && (

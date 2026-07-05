@@ -8,7 +8,14 @@ import { UserFacingError } from '../errors';
 import { readFileSize } from './util';
 
 
-const mapVideoCodec = (codec: string) => ({ av1: 'libsvtav1' }[codec] ?? codec);
+const mapVideoCodec = (codec: string) => ({
+  av1: 'libsvtav1',
+  h264: 'libx264',
+  hevc: 'hevc_videotoolbox',
+  vp8: 'libvpx',
+  vp9: 'libvpx-vp9',
+  prores: 'prores_ks',
+}[codec] ?? codec);
 
 export async function needsSmartCut({ path, desiredCutFrom, videoStream }: {
   path: string,
