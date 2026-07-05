@@ -6,5 +6,8 @@ export const ffmpegExtractWindow = 60;
 
 export const zoomMax = 2 ** 14;
 
+export const timelineBaseSecondsPerScreen = 3 * 60 * 60;
+export const timelineMinContentWidth = 180;
+
 export const rightBarWidth = 220;
 export const leftBarWidth = 240;

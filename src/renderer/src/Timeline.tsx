@@ -1,5 +1,5 @@
-import type { MutableRefObject, CSSProperties, WheelEventHandler, MouseEventHandler, MouseEvent as ReactMouseEvent, ChangeEventHandler, KeyboardEventHandler, ReactNode } from 'react';
-import { memo, useRef, useMemo, useCallback, useEffect, useState } from 'react';
+import type { MutableRefObject, CSSProperties, WheelEventHandler, MouseEventHandler, MouseEvent as ReactMouseEvent, ChangeEventHandler, KeyboardEventHandler, ReactNode, PointerEvent as ReactPointerEvent } from 'react';
+import { memo, useRef, useMemo, useCallback, useEffect, useState, useId } from 'react';
 import { useMotionValue, useSpring } from 'motion/react';
 import debounce from 'lodash/debounce';
 import { useTranslation } from 'react-i18next';
@@ -22,7 +22,7 @@ import type { ContextMenuTemplate, FormatTimecode, InverseCutSegment, OverviewWa
 import Button from './components/Button';
 import type { UseSegments } from './hooks/useSegments';
 import { calculateTimelinePercent as calculateTimelinePercent2, calculateTimelinePos } from './util';
-import { zoomMax } from './util/constants';
+import { timelineBaseSecondsPerScreen, timelineMinContentWidth, zoomMax } from './util/constants';
 
 
 type CalculateTimelinePercent = (time: number) => string | undefined;
@@ -113,6 +113,8 @@ function Timeline({
   zoomWindowStartTime,
   zoomWindowEndTime,
   onZoomWindowStartTimeChange,
+  onZoomWindowDurationChange,
+  onSourceWindowChange,
   onGenerateOverviewWaveformClick,
   splitCurrentSegment,
   undoCutSegments,
@@ -158,6 +160,8 @@ function Timeline({
   zoomWindowStartTime: number,
   zoomWindowEndTime: number | undefined,
   onZoomWindowStartTimeChange: (a: number) => void,
+  onZoomWindowDurationChange: (duration: number | undefined) => void,
+  onSourceWindowChange: (start: number, duration: number | undefined) => void,
   onGenerateOverviewWaveformClick: () => void,
   splitCurrentSegment: (time?: number) => void,
   undoCutSegments: () => void,
@@ -185,16 +189,22 @@ function Timeline({
 
   const { invertCutSegments } = useUserSettings();
 
+  const timelineScrollerId = useId();
   const timelineScrollerRef = useRef<HTMLDivElement>(null);
   const timelineScrollerSkipEventRef = useRef<boolean>(false);
   const timelineScrollerSkipEventDebounce = useRef<() => void>(undefined);
   const timelineWrapperRef = useRef<HTMLDivElement>(null);
   const timelineRootRef = useRef<HTMLDivElement>(null);
+  const timelineScrollbarTrackRef = useRef<HTMLDivElement>(null);
+  const timelineScrollbarThumbRef = useRef<HTMLDivElement>(null);
   const seekAnimationFrameRef = useRef<number | undefined>(undefined);
   const pendingSeekTimeRef = useRef<number | undefined>(undefined);
+  const emitZoomWindowFrameRef = useRef<number | undefined>(undefined);
+  const updateScrollbarFrameRef = useRef<number | undefined>(undefined);
+  const draggingScrollbarRef = useRef(false);
+  const scrollbarDragOffsetRef = useRef(0);
   const [draggingSourceTime, setDraggingSourceTime] = useState<number>();
-
-  const isZoomed = zoom > 1;
+  const [timelineViewportWidth, setTimelineViewportWidth] = useState(0);
 
   const {
     timelineSegments,
@@ -298,18 +308,80 @@ function Timeline({
   const playheadSourceTime = draggingSourceTime ?? (playing ? playerTime : undefined) ?? commandedTime;
   const playheadTimelineTime = useMemo(() => sourceTimeToTimelineTime(playheadSourceTime), [playheadSourceTime, sourceTimeToTimelineTime]);
   const playheadTimePercent = useMemo(() => calculateTimelinePercent2(playheadTimelineTime, timelineDisplayDuration), [playheadTimelineTime, timelineDisplayDuration]);
-
+  const timelineBaseWidth = useMemo(() => {
+    if (timelineViewportWidth <= 0) return undefined;
+    return Math.max((timelineDisplayDuration / timelineBaseSecondsPerScreen) * timelineViewportWidth, timelineMinContentWidth);
+  }, [timelineDisplayDuration, timelineViewportWidth]);
+  const timelineContentWidth = useMemo(() => (timelineBaseWidth == null ? undefined : Math.max(timelineBaseWidth * zoom, 1)), [timelineBaseWidth, zoom]);
+  const isTimelineScrollable = timelineContentWidth != null && timelineContentWidth > timelineViewportWidth;
+  const timelineMaxScrollLeft = useMemo(() => Math.max((timelineContentWidth ?? 0) - timelineViewportWidth, 0), [timelineContentWidth, timelineViewportWidth]);
+  const zoomWindowDuration = useMemo(() => {
+    if (timelineContentWidth == null || timelineViewportWidth <= 0) return undefined;
+    return Math.min(timelineDisplayDuration, (timelineViewportWidth / timelineContentWidth) * timelineDisplayDuration);
+  }, [timelineContentWidth, timelineDisplayDuration, timelineViewportWidth]);
+  const timelineScrollbarThumbWidth = useMemo(() => {
+    if (timelineContentWidth == null || timelineViewportWidth <= 0) return 0;
+    return Math.min(timelineViewportWidth, Math.max(32, (timelineViewportWidth / timelineContentWidth) * timelineViewportWidth));
+  }, [timelineContentWidth, timelineViewportWidth]);
   const timeOfInterestPosPixels = useMemo(() => {
     // https://github.com/mifi/lossless-cut/issues/676
     const pos = calculateTimelinePos(sourceTimeToTimelineTime(relevantTime), timelineDisplayDuration);
     // eslint-disable-next-line react-hooks/refs
-    if (pos != null && timelineScrollerRef.current) return pos * zoom * timelineScrollerRef.current!.offsetWidth;
+    if (pos != null && timelineContentWidth != null) return pos * timelineContentWidth;
     return undefined;
-  }, [relevantTime, sourceTimeToTimelineTime, timelineDisplayDuration, zoom]);
+  }, [relevantTime, sourceTimeToTimelineTime, timelineContentWidth, timelineDisplayDuration]);
 
-  const calcZoomWindowStartTime = useCallback(() => (timelineScrollerRef.current
-    ? (timelineScrollerRef.current.scrollLeft / (timelineScrollerRef.current!.offsetWidth * zoom)) * timelineDisplayDuration
-    : 0), [timelineDisplayDuration, zoom]);
+  const calcZoomWindowStartTime = useCallback(() => {
+    const scroller = timelineScrollerRef.current;
+    if (scroller == null || timelineContentWidth == null || timelineContentWidth <= 0) return 0;
+    return Math.min((scroller.scrollLeft / timelineContentWidth) * timelineDisplayDuration, timelineDisplayDuration);
+  }, [timelineContentWidth, timelineDisplayDuration]);
+  const getSourceWindow = useCallback((displayStartTime: number) => {
+    if (zoomWindowDuration == null) return { start: timelineTimeToSourceTime(displayStartTime), duration: undefined };
+
+    const displayEndTime = Math.min(displayStartTime + zoomWindowDuration, timelineDisplayDuration);
+    const sourceStartTime = timelineTimeToSourceTime(displayStartTime);
+    const sourceEndTime = timelineTimeToSourceTime(displayEndTime);
+    const sourceWindowStartTime = Math.min(sourceStartTime, sourceEndTime);
+    const sourceWindowEndTime = Math.max(sourceStartTime, sourceEndTime);
+
+    return {
+      start: sourceWindowStartTime,
+      duration: Math.min(Math.max(sourceWindowEndTime - sourceWindowStartTime, 0), Math.max(fileDurationNonZero - sourceWindowStartTime, 0)),
+    };
+  }, [fileDurationNonZero, timelineDisplayDuration, timelineTimeToSourceTime, zoomWindowDuration]);
+  const emitZoomWindow = useCallback(() => {
+    const displayStartTime = calcZoomWindowStartTime();
+    const sourceWindow = getSourceWindow(displayStartTime);
+    onZoomWindowStartTimeChange(displayStartTime);
+    onSourceWindowChange(sourceWindow.start, sourceWindow.duration);
+  }, [calcZoomWindowStartTime, getSourceWindow, onSourceWindowChange, onZoomWindowStartTimeChange]);
+  const scheduleEmitZoomWindow = useCallback(() => {
+    if (emitZoomWindowFrameRef.current != null) return;
+    emitZoomWindowFrameRef.current = requestAnimationFrame(() => {
+      emitZoomWindowFrameRef.current = undefined;
+      emitZoomWindow();
+    });
+  }, [emitZoomWindow]);
+  const updateTimelineScrollbarThumb = useCallback(() => {
+    const scroller = timelineScrollerRef.current;
+    const thumb = timelineScrollbarThumbRef.current;
+    const track = timelineScrollbarTrackRef.current;
+    if (scroller == null || thumb == null || track == null) return;
+
+    const draggableWidth = Math.max(timelineViewportWidth - timelineScrollbarThumbWidth, 0);
+    const thumbLeft = timelineMaxScrollLeft > 0 ? (scroller.scrollLeft / timelineMaxScrollLeft) * draggableWidth : 0;
+    thumb.style.width = `${timelineScrollbarThumbWidth}px`;
+    thumb.style.transform = `translate3d(${thumbLeft}px, 0, 0)`;
+    track.setAttribute('aria-valuenow', `${Math.round(scroller.scrollLeft)}`);
+  }, [timelineMaxScrollLeft, timelineScrollbarThumbWidth, timelineViewportWidth]);
+  const scheduleUpdateTimelineScrollbarThumb = useCallback(() => {
+    if (updateScrollbarFrameRef.current != null) return;
+    updateScrollbarFrameRef.current = requestAnimationFrame(() => {
+      updateScrollbarFrameRef.current = undefined;
+      updateTimelineScrollbarThumb();
+    });
+  }, [updateTimelineScrollbarThumb]);
 
   // const zoomWindowStartTime = calcZoomWindowStartTime(duration, zoom);
 
@@ -317,6 +389,19 @@ function Timeline({
     timelineScrollerSkipEventDebounce.current = debounce(() => {
       timelineScrollerSkipEventRef.current = false;
     }, 1000);
+  }, []);
+
+  useEffect(() => {
+    const scroller = timelineScrollerRef.current;
+    invariant(scroller != null);
+
+    const updateTimelineViewportWidth = () => setTimelineViewportWidth(scroller.clientWidth);
+    updateTimelineViewportWidth();
+
+    const resizeObserver = new ResizeObserver(updateTimelineViewportWidth);
+    resizeObserver.observe(scroller);
+
+    return () => resizeObserver.disconnect();
   }, []);
 
   function suppressScrollerEvents() {
@@ -337,16 +422,19 @@ function Timeline({
 
   // Pan timeline when cursor moves out of timeline window
   useEffect(() => {
-    if (timeOfInterestPosPixels == null || timelineScrollerSkipEventRef.current) return;
+    if (timeOfInterestPosPixels == null || timelineScrollerSkipEventRef.current || draggingScrollbarRef.current) return;
 
     invariant(timelineScrollerRef.current != null);
-    if (timeOfInterestPosPixels > timelineScrollerRef.current.scrollLeft + timelineScrollerRef.current.offsetWidth) {
+    if (timeOfInterestPosPixels > timelineScrollerRef.current.scrollLeft + timelineScrollerRef.current.clientWidth) {
       const timelineWidth = timelineWrapperRef.current!.offsetWidth;
+      const maxScrollLeft = Math.max(timelineWidth - timelineScrollerRef.current.clientWidth, 0);
       const scrollLeft = timeOfInterestPosPixels - (timelineScrollerRef.current.offsetWidth * 0.1);
-      scrollLeftMotion.set(Math.min(scrollLeft, timelineWidth - timelineScrollerRef.current.offsetWidth));
+      scrollLeftMotion.set(Math.min(Math.max(scrollLeft, 0), maxScrollLeft));
     } else if (timeOfInterestPosPixels < timelineScrollerRef.current.scrollLeft) {
+      const timelineWidth = timelineWrapperRef.current!.offsetWidth;
+      const maxScrollLeft = Math.max(timelineWidth - timelineScrollerRef.current.clientWidth, 0);
       const scrollLeft = timeOfInterestPosPixels - (timelineScrollerRef.current.offsetWidth * 0.9);
-      scrollLeftMotion.set(Math.max(scrollLeft, 0));
+      scrollLeftMotion.set(Math.min(Math.max(scrollLeft, 0), maxScrollLeft));
     }
   }, [timeOfInterestPosPixels, scrollLeftMotion]);
 
@@ -354,15 +442,15 @@ function Timeline({
   useEffect(() => {
     suppressScrollerEvents();
 
-    if (isZoomed) {
+    if (isTimelineScrollable && timelineContentWidth != null) {
       invariant(timelineScrollerRef.current != null);
-      const zoomedTargetWidth = timelineScrollerRef.current.offsetWidth * zoom;
 
-      const scrollLeft = Math.max((sourceTimeToTimelineTime(commandedTimeRef.current) / timelineDisplayDuration) * zoomedTargetWidth - timelineScrollerRef.current.offsetWidth / 2, 0);
+      const maxScrollLeft = Math.max(timelineContentWidth - timelineScrollerRef.current.clientWidth, 0);
+      const scrollLeft = Math.min(Math.max((sourceTimeToTimelineTime(commandedTimeRef.current) / timelineDisplayDuration) * timelineContentWidth - timelineScrollerRef.current.clientWidth / 2, 0), maxScrollLeft);
       scrollLeftMotion.set(scrollLeft);
       timelineScrollerRef.current.scrollLeft = scrollLeft;
     }
-  }, [zoom, timelineDisplayDuration, sourceTimeToTimelineTime, commandedTimeRef, scrollLeftMotion, isZoomed]);
+  }, [zoom, timelineContentWidth, timelineDisplayDuration, sourceTimeToTimelineTime, commandedTimeRef, scrollLeftMotion, isTimelineScrollable]);
 
 
   useEffect(() => {
@@ -378,8 +466,66 @@ function Timeline({
   }, []);
 
   const onTimelineScroll = useCallback(() => {
-    onZoomWindowStartTimeChange(calcZoomWindowStartTime());
-  }, [calcZoomWindowStartTime, onZoomWindowStartTimeChange]);
+    scheduleUpdateTimelineScrollbarThumb();
+    if (!draggingScrollbarRef.current) scheduleEmitZoomWindow();
+  }, [scheduleEmitZoomWindow, scheduleUpdateTimelineScrollbarThumb]);
+
+  useEffect(() => {
+    onZoomWindowDurationChange(zoomWindowDuration);
+  }, [onZoomWindowDurationChange, zoomWindowDuration]);
+
+  useEffect(() => {
+    emitZoomWindow();
+  }, [emitZoomWindow]);
+  useEffect(() => {
+    updateTimelineScrollbarThumb();
+  }, [updateTimelineScrollbarThumb]);
+  useEffect(() => () => {
+    if (emitZoomWindowFrameRef.current != null) cancelAnimationFrame(emitZoomWindowFrameRef.current);
+    if (updateScrollbarFrameRef.current != null) cancelAnimationFrame(updateScrollbarFrameRef.current);
+  }, []);
+
+  const setTimelineScrollLeftFromPointer = useCallback((clientX: number) => {
+    const scroller = timelineScrollerRef.current;
+    const track = timelineScrollbarTrackRef.current;
+    if (scroller == null || track == null || timelineMaxScrollLeft <= 0) return;
+
+    const { left } = track.getBoundingClientRect();
+    const draggableWidth = Math.max(timelineViewportWidth - timelineScrollbarThumbWidth, 1);
+    const thumbLeft = Math.min(Math.max(clientX - left - scrollbarDragOffsetRef.current, 0), draggableWidth);
+    scroller.scrollLeft = (thumbLeft / draggableWidth) * timelineMaxScrollLeft;
+    updateTimelineScrollbarThumb();
+  }, [timelineMaxScrollLeft, timelineScrollbarThumbWidth, timelineViewportWidth, updateTimelineScrollbarThumb]);
+
+  const onTimelineScrollbarPointerDown = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!isTimelineScrollable) return;
+
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    draggingScrollbarRef.current = true;
+    const thumb = timelineScrollbarThumbRef.current;
+    scrollbarDragOffsetRef.current = thumb != null && e.target instanceof Node && thumb.contains(e.target)
+      ? e.clientX - thumb.getBoundingClientRect().left
+      : timelineScrollbarThumbWidth / 2;
+    suppressScrollerEvents();
+    setTimelineScrollLeftFromPointer(e.clientX);
+  }, [isTimelineScrollable, setTimelineScrollLeftFromPointer, timelineScrollbarThumbWidth]);
+
+  const onTimelineScrollbarPointerMove = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!draggingScrollbarRef.current) return;
+    e.preventDefault();
+    setTimelineScrollLeftFromPointer(e.clientX);
+  }, [setTimelineScrollLeftFromPointer]);
+
+  const onTimelineScrollbarPointerUp = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!draggingScrollbarRef.current) return;
+    e.preventDefault();
+    draggingScrollbarRef.current = false;
+    scrollbarDragOffsetRef.current = 0;
+    updateTimelineScrollbarThumb();
+    scheduleEmitZoomWindow();
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+  }, [scheduleEmitZoomWindow, updateTimelineScrollbarThumb]);
 
   // Keep cursor in middle while scrolling
   /* const onTimelineScroll = useCallback((e) => {
@@ -395,8 +541,9 @@ function Timeline({
     const target = timelineWrapperRef.current;
     invariant(target != null);
     const rect = target.getBoundingClientRect();
-    const relX = e.pageX - (rect.left + document.body.scrollLeft);
-    return (relX / target.offsetWidth) * timelineDisplayDuration;
+    const relX = e.clientX - rect.left;
+    if (target.offsetWidth <= 0) return 0;
+    return Math.min(Math.max((relX / target.offsetWidth) * timelineDisplayDuration, 0), timelineDisplayDuration);
   }, [timelineDisplayDuration]);
 
   const mouseDownRef = useRef<unknown>(undefined);
@@ -545,8 +692,8 @@ function Timeline({
   }), [compositeTimelineHeight, hasMediaTimeline]);
 
   const timelineContentStyle = useMemo<CSSProperties>(() => ({
-    width: `${zoom * 100}%`,
-  }), [zoom]);
+    width: timelineContentWidth != null ? `${timelineContentWidth}px` : `${zoom * 100}%`,
+  }), [timelineContentWidth, zoom]);
 
   const cutBoundaryTimes = useMemo(() => {
     const timeEpsilon = Math.max(timelineDisplayDuration / 1_000_000, 0.001);
@@ -716,7 +863,8 @@ function Timeline({
       )}
 
       <div
-        className={`hide-scrollbar ${styles['timeline-scroller']}`}
+        id={timelineScrollerId}
+        className={styles['timeline-scroller']}
         onWheel={onWheel}
         onScroll={onTimelineScroll}
         ref={timelineScrollerRef}
@@ -826,6 +974,29 @@ function Timeline({
           )}
         </div>
       </div>
+
+      {isTimelineScrollable && (
+        <div
+          ref={timelineScrollbarTrackRef}
+          className={styles['timeline-scrollbar']}
+          role="scrollbar"
+          aria-orientation="horizontal"
+          aria-controls={timelineScrollerId}
+          aria-valuemin={0}
+          aria-valuemax={timelineMaxScrollLeft}
+          aria-valuenow={0}
+          onPointerDown={onTimelineScrollbarPointerDown}
+          onPointerMove={onTimelineScrollbarPointerMove}
+          onPointerUp={onTimelineScrollbarPointerUp}
+          onPointerCancel={onTimelineScrollbarPointerUp}
+        >
+          <div
+            ref={timelineScrollbarThumbRef}
+            className={styles['timeline-scrollbar-thumb']}
+            style={{ width: timelineScrollbarThumbWidth }}
+          />
+        </div>
+      )}
 
       {footerControls != null && (
         <div className={styles['timeline-footer-controls']}>

@@ -124,15 +124,44 @@
 }
 
 .timeline-scroller {
-  overflow-x: scroll;
+  overflow-x: hidden;
   overflow-y: hidden;
-  padding: 0 0 4px;
   background: var(--gray-2);
+}
+
+.timeline-scroller::-webkit-scrollbar {
+  display: none;
 }
 
 .timeline-content {
   position: relative;
-  min-width: 100%;
+  min-width: 0;
+}
+
+.timeline-scrollbar {
+  position: relative;
+  height: 12px;
+  box-sizing: border-box;
+  border-top: 1px solid var(--gray-6);
+  background: var(--gray-3);
+  cursor: pointer;
+  touch-action: none;
+}
+
+.timeline-scrollbar-thumb {
+  position: absolute;
+  top: 3px;
+  left: 0;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--gray-10);
+  cursor: grab;
+  will-change: transform;
+}
+
+.timeline-scrollbar:active .timeline-scrollbar-thumb {
+  cursor: grabbing;
+  background: var(--gray-11);
 }
 
 .seek-lane {

@@ -92,7 +92,7 @@ import { openSendReportDialog } from './reporting';
 import { sortSegments, convertSegmentsToChaptersWithGaps, hasAnySegmentOverlap, isDurationValid, getPlaybackAction, filterNonMarkers, isInitialSegment } from './segments';
 import type { GenerateMergedOutFileNamesParams, GeneratedOutFileNames } from './util/outputNameTemplate';
 import { generateCutFileNames as generateCutFileNamesRaw, generateCutMergedFileNames as generateCutMergedFileNamesRaw, generateMergedFileNames as generateMergedFileNamesRaw, defaultCutFileTemplate, defaultCutMergedFileTemplate, defaultMergedFileTemplate } from './util/outputNameTemplate';
-import { leftBarWidth, ffmpegExtractWindow, zoomMax } from './util/constants';
+import { leftBarWidth, ffmpegExtractWindow, timelineBaseSecondsPerScreen, zoomMax } from './util/constants';
 import BigWaveform from './components/BigWaveform';
 
 import type { BatchFile, Chapter, EdlExportType, EdlFileType, EdlImportType, ExportMode, FfmpegCommandLog, FilesMeta, FileStats, ParamsByFile, PlaybackMode, SegmentBase, SegmentColorIndex, SegmentToExport, StateSegment, TunerType } from './types';
@@ -164,6 +164,9 @@ function App() {
   const [zoomUnrounded, setZoom] = useState(1);
   const [shortestFlag, setShortestFlag] = useState(false);
   const [zoomWindowStartTime, setZoomWindowStartTime] = useState(0);
+  const [zoomWindowDuration, setZoomWindowDuration] = useState<number>();
+  const [thumbnailWindowStartTime, setThumbnailWindowStartTime] = useState(0);
+  const [thumbnailWindowDuration, setThumbnailWindowDuration] = useState<number>();
   const [activeVideoStreamIndex, setActiveVideoStreamIndex] = useState<number>();
   const [activeAudioStreamIndexes, setActiveAudioStreamIndexes] = useState<Set<number>>(new Set());
   const [activeSubtitleStreamIndex, setActiveSubtitleStreamIndex] = useState<number>();
@@ -215,8 +218,15 @@ function App() {
 
   const fileDurationNonZero = isDurationValid(fileDuration) ? fileDuration : 1;
   const zoom = Math.floor(zoomUnrounded);
-  const zoomedDuration = isDurationValid(fileDuration) ? fileDuration / zoom : undefined;
-  const zoomWindowEndTime = useMemo(() => (zoomedDuration != null ? zoomWindowStartTime + zoomedDuration : undefined), [zoomedDuration, zoomWindowStartTime]);
+  const zoomedDuration = useMemo(() => {
+    if (!isDurationValid(fileDuration)) return undefined;
+    return Math.min(fileDuration, zoomWindowDuration ?? (timelineBaseSecondsPerScreen / zoom));
+  }, [fileDuration, zoom, zoomWindowDuration]);
+  const zoomWindowEndTime = useMemo(() => (zoomedDuration != null && fileDuration != null ? Math.min(fileDuration, zoomWindowStartTime + zoomedDuration) : undefined), [fileDuration, zoomedDuration, zoomWindowStartTime]);
+  const thumbnailZoomedDuration = useMemo(() => {
+    if (!isDurationValid(fileDuration)) return undefined;
+    return Math.min(fileDuration, thumbnailWindowDuration ?? zoomedDuration ?? fileDuration);
+  }, [fileDuration, thumbnailWindowDuration, zoomedDuration]);
 
   useEffect(() => setDocumentTitle({ filePath, working: working?.text, progress }), [progress, filePath, working?.text]);
 
@@ -338,7 +348,7 @@ function App() {
   const zoomAbs = useCallback((fn: (v: number) => number) => setZoom((z) => Math.min(Math.max(fn(z), 1), zoomMax)), []);
   const zoomRel = useCallback((rel: number) => zoomAbs((z) => z + (rel * (1 + (z / 10)))), [zoomAbs]);
 
-  const comfortZoom = isDurationValid(fileDuration) ? Math.max(fileDuration / 100, 1) : undefined;
+  const comfortZoom = isDurationValid(fileDuration) ? Math.max(timelineBaseSecondsPerScreen / 100, 1) : undefined;
   const timelineToggleComfortZoom = useCallback(() => {
     if (!comfortZoom) return;
 
@@ -569,7 +579,12 @@ function App() {
   const bigWaveformEnabled = waveformEnabled && waveformMode === 'big-waveform';
   const showThumbnails = thumbnailsEnabled && hasVideo;
 
-  const { thumbnailsSorted, setThumbnails } = useThumbnails({ filePath, zoomedDuration, zoomWindowStartTime, showThumbnails });
+  const onTimelineSourceWindowChange = useCallback((start: number, duration: number | undefined) => {
+    setThumbnailWindowStartTime(start);
+    setThumbnailWindowDuration(duration);
+  }, []);
+
+  const { thumbnailsSorted, setThumbnails } = useThumbnails({ filePath, zoomedDuration: thumbnailZoomedDuration, zoomWindowStartTime: thumbnailWindowStartTime, showThumbnails });
 
   const { neighbouringKeyFrames, findNearestKeyFrameTime, keyframeByNumber, readAllKeyframes } = useKeyframes({ keyframesEnabled, filePath, commandedTime, videoStream: activeVideoStream, detectedFps, ffmpegExtractWindow, maxKeyframes, currentCutSegOrWholeTimeline, setWorking, setMaxKeyframes, handleError });
   const { waveforms, overviewWaveform, renderOverviewWaveform } = useWaveform({ filePath, relevantTime, waveformEnabled, audioStream: activeAudioStreams[0], ffmpegExtractWindow, fileDuration });
@@ -693,6 +708,9 @@ function App() {
     setThumbnails([]);
     setShortestFlag(false);
     setZoomWindowStartTime(0);
+    setZoomWindowDuration(undefined);
+    setThumbnailWindowStartTime(0);
+    setThumbnailWindowDuration(undefined);
     setSubtitlesByStreamId({});
     setActiveAudioStreamIndexes(new Set());
     setActiveVideoStreamIndex(undefined);
@@ -2740,6 +2758,8 @@ function App() {
                     zoomWindowStartTime={zoomWindowStartTime}
                     zoomWindowEndTime={zoomWindowEndTime}
                     onZoomWindowStartTimeChange={setZoomWindowStartTime}
+                    onZoomWindowDurationChange={setZoomWindowDuration}
+                    onSourceWindowChange={onTimelineSourceWindowChange}
                     onGenerateOverviewWaveformClick={generateOverviewWaveform}
                     splitCurrentSegment={splitCurrentSegment}
                     undoCutSegments={cutSegmentsHistory.back}
