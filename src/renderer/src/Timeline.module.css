@@ -16,10 +16,15 @@
   border-bottom: 1px solid var(--gray-7);
 }
 
+.timeline-root:focus,
+.timeline-root:focus-visible {
+  outline: none;
+}
+
 .timeline-toolbar {
   display: flex;
   align-items: center;
-  height: 32px;
+  height: 40px;
   padding: 0 10px;
   box-sizing: border-box;
   border-bottom: 1px solid var(--gray-6);
@@ -57,14 +62,14 @@
 .history-button-group {
   display: inline-flex;
   align-items: center;
-  height: 32px;
+  height: 40px;
   margin-right: 6px;
   background: rgb(35, 35, 35);
 }
 
 .history-button {
   width: 42px;
-  height: 32px;
+  height: 40px;
   border-radius: 0;
   color: white;
   background: transparent;
@@ -77,6 +82,32 @@
 
 .toolbar-spacer {
   flex: 1;
+}
+
+.timeline-leading-controls {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-right: .75em;
+}
+
+.timeline-primary-controls {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  min-width: 0;
+  padding: 0 12px;
+  box-sizing: border-box;
+}
+
+.timeline-footer-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 16px;
+  box-sizing: border-box;
+  border-top: 1px solid var(--gray-6);
+  background: var(--gray-3);
 }
 
 .zoom-control {

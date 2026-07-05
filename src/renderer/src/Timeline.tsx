@@ -1,4 +1,4 @@
-import type { MutableRefObject, CSSProperties, WheelEventHandler, MouseEventHandler, MouseEvent as ReactMouseEvent, ChangeEventHandler, KeyboardEventHandler } from 'react';
+import type { MutableRefObject, CSSProperties, WheelEventHandler, MouseEventHandler, MouseEvent as ReactMouseEvent, ChangeEventHandler, KeyboardEventHandler, ReactNode } from 'react';
 import { memo, useRef, useMemo, useCallback, useEffect, useState } from 'react';
 import { useMotionValue, useSpring } from 'motion/react';
 import debounce from 'lodash/debounce';
@@ -132,6 +132,8 @@ function Timeline({
   playing,
   darkMode,
   setHoveringTime,
+  renderPrimaryControls,
+  footerControls,
 } : {
   fileName: string | undefined,
   fileDurationNonZero: number,
@@ -176,6 +178,8 @@ function Timeline({
   commandedTimeRef: MutableRefObject<number>,
   darkMode: boolean,
   setHoveringTime: (time: number | undefined) => void,
+  renderPrimaryControls?: (controls: { leadingControls: ReactNode, trailingControls: ReactNode }) => ReactNode,
+  footerControls?: ReactNode,
 }) {
   const { t } = useTranslation();
 
@@ -662,30 +666,46 @@ function Timeline({
     return () => window.removeEventListener('keydown', onTimelineKeyDown);
   }, [redoCutSegments, removeSegments, selectAllSegments, selectedTimelineSegmentIds, undoCutSegments]);
 
+  const leadingControls = (
+    <div className={styles['timeline-leading-controls']}>
+      <div className={styles['history-button-group']}>
+        <button type="button" className={`${styles['toolbar-button']} ${styles['history-button']}`} title={t('Undo')} aria-label={t('Undo')} onClick={() => undoCutSegments()} disabled={!canUndoCutSegments}>
+          <MdUndo />
+        </button>
+        <button type="button" className={`${styles['toolbar-button']} ${styles['history-button']}`} title={t('Redo')} aria-label={t('Redo')} onClick={() => redoCutSegments()} disabled={!canRedoCutSegments}>
+          <MdRedo />
+        </button>
+      </div>
+
+      <button type="button" className={styles['toolbar-button']} title={t('Split segment at cursor')} onClick={onSplitCurrentSegmentPress}>
+        <AiOutlineSplitCells />
+      </button>
+    </div>
+  );
+
+  const trailingControls = (
+    <div className={styles['zoom-control']} title={t('Zoom')}>
+      <FaSearchMinus />
+      <input type="range" min={0} max={maxZoomPower} step={1} value={zoomPower} onChange={onZoomSliderChange} />
+      <FaSearchPlus />
+    </div>
+  );
+
 
   return (
     <div ref={timelineRootRef} className={`no-user-select ${styles['timeline-root']}`} tabIndex={-1}>
       <div className={styles['timeline-toolbar']}>
-        <div className={styles['history-button-group']}>
-          <button type="button" className={`${styles['toolbar-button']} ${styles['history-button']}`} title={t('Undo')} aria-label={t('Undo')} onClick={() => undoCutSegments()} disabled={!canUndoCutSegments}>
-            <MdUndo />
-          </button>
-          <button type="button" className={`${styles['toolbar-button']} ${styles['history-button']}`} title={t('Redo')} aria-label={t('Redo')} onClick={() => redoCutSegments()} disabled={!canRedoCutSegments}>
-            <MdRedo />
-          </button>
-        </div>
-
-        <button type="button" className={styles['toolbar-button']} title={t('Split segment at cursor')} onClick={onSplitCurrentSegmentPress}>
-          <AiOutlineSplitCells />
-        </button>
-
-        <div className={styles['toolbar-spacer']} />
-
-        <div className={styles['zoom-control']} title={t('Zoom')}>
-          <FaSearchMinus />
-          <input type="range" min={0} max={maxZoomPower} step={1} value={zoomPower} onChange={onZoomSliderChange} />
-          <FaSearchPlus />
-        </div>
+        {renderPrimaryControls != null ? (
+          <div className={styles['timeline-primary-controls']}>
+            {renderPrimaryControls({ leadingControls, trailingControls })}
+          </div>
+        ) : (
+          <>
+            {leadingControls}
+            <div className={styles['toolbar-spacer']} />
+            {trailingControls}
+          </>
+        )}
       </div>
 
       {(waveformEnabled && !shouldShowWaveform) && (
@@ -806,6 +826,12 @@ function Timeline({
           )}
         </div>
       </div>
+
+      {footerControls != null && (
+        <div className={styles['timeline-footer-controls']}>
+          {footerControls}
+        </div>
+      )}
     </div>
   );
 }

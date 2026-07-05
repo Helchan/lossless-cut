@@ -35,7 +35,7 @@ import LastCommands from './LastCommands';
 import StreamsSelector from './StreamsSelector';
 import Settings from './components/Settings';
 import Timeline from './Timeline';
-import BottomBar from './BottomBar';
+import { BottomBarFirstRow, BottomBarTimeRow, type BottomBarProps } from './BottomBar';
 import ExportConfirm from './components/ExportConfirm';
 import ValueTuners from './components/ValueTuners';
 import VolumeControl from './components/VolumeControl';
@@ -125,6 +125,12 @@ interface ExportOptions {
   accurateCut?: boolean,
 }
 
+interface PendingExportRequest {
+  exportModeOverride?: ExportMode,
+  segmentsToExportOverride?: SegmentToExport[],
+  exportOptions?: ExportOptions,
+}
+
 const { ipcRenderer, webUtils } = window.require('electron');
 const { lstat } = window.require('node:fs/promises');
 const { parse: parsePath, join: pathJoin, basename, dirname } = window.require('node:path');
@@ -163,6 +169,7 @@ function App() {
   const [activeSubtitleStreamIndex, setActiveSubtitleStreamIndex] = useState<number>();
   const [hideCompatPlayer, setHideCompatPlayer] = useState(false);
   const [exportConfirmOpen, setExportConfirmOpen] = useState(false);
+  const [pendingExportRequest, setPendingExportRequest] = useState<PendingExportRequest>();
   const [cacheBuster, setCacheBuster] = useState(0);
   const [currentFileExportCount, setCurrentFileExportCount] = useState(0);
 
@@ -202,7 +209,7 @@ function App() {
   const keyBindingByAction = useMemo(() => Object.fromEntries(keyBindings.map((binding) => [binding.action, binding])), [keyBindings]);
 
   const { working, setWorking, workingRef, abortWorking } = useLoading();
-  const { videoRef, videoContainerRef, playbackRate, setPlaybackRate, outputPlaybackRate, setOutputPlaybackRate, commandedTime, seekAbs, playingRef, getRelevantTime, setPlaying, onSeeked, relevantTime, onStartPlaying, setCommandedTime, setOutputPlaybackRateState, commandedTimeRef, onStopPlaying, onVideoAbort, playerTime, setPlayerTime, playbackMode, setPlaybackMode, playbackModeRef, playing, play, pause, seekRel } = useVideo({ filePath });
+  const { videoRef, videoContainerRef, playbackRate, setPlaybackRate, outputPlaybackRate, setOutputPlaybackRate, commandedTime, seekAbs, playingRef, getRelevantTime, setPlaying, onSeeked, relevantTime, onStartPlaying, setCommandedTime, setOutputPlaybackRateState, commandedTimeRef, onStopPlaying, onVideoAbort, playerTime, setPlayerTime, setPlaybackMode, playbackModeRef, playing, play, pause, seekRel } = useVideo({ filePath });
   const { timecodePlaceholder, formatTimecode, parseTimecode, getFrameCount, promptTimecode } = useTimecode({ detectedFps, timecodeFormat, showGenericDialog });
   const { loadSubtitle, subtitlesByStreamId, setSubtitlesByStreamId } = useSubtitles();
 
@@ -1050,16 +1057,29 @@ function App() {
     }
   }, [askForCleanupChoices, cleanupChoices, cleanupFiles, isFileOpened, setWorking, workingRef]);
 
-  const closeExportConfirm = useCallback(() => setExportConfirmOpen(false), []);
+  const closeExportConfirm = useCallback(() => {
+    setExportConfirmOpen(false);
+    setPendingExportRequest(undefined);
+  }, []);
 
   const willMerge = segmentsToExport.length > 1 && autoMerge;
+  const exportConfirmSegmentsToExport = pendingExportRequest?.segmentsToExportOverride ?? segmentsToExport;
+  const exportConfirmExportMode = pendingExportRequest?.exportModeOverride;
+  const exportConfirmWillMerge = exportConfirmExportMode === 'merge' || exportConfirmExportMode === 'merge+separate'
+    ? exportConfirmSegmentsToExport.length > 1
+    : (exportConfirmExportMode === 'separate' ? false : willMerge);
+  const exportConfirmAreWeCutting = exportConfirmSegmentsToExport.some(({ start, end }) => isCuttingStart(start) || isCuttingEnd(end, fileDuration));
+  const exportConfirmNeedSmartCut = exportConfirmAreWeCutting && enableSmartCut;
+  const exportConfirmIsEncoding = exportConfirmNeedSmartCut || lossyMode != null;
 
-  const onExportConfirm = useCallback(async (exportModeOverride?: ExportMode, segmentsToExportOverride?: SegmentToExport[], exportOptions: ExportOptions = {}) => {
+  const onExportConfirm = useCallback(async (exportModeOverride?: ExportMode, segmentsToExportOverride?: SegmentToExport[], exportOptions?: ExportOptions) => {
     invariant(filePath != null && outputDir != null);
     emitEvent({ eventName: 'export-start', path: filePath });
 
-    const effectiveSegmentsToExport = segmentsToExportOverride ?? segmentsToExport;
-    if (segmentsToExportOverride != null && effectiveSegmentsToExport.length === 0) {
+    const effectiveExportModeOverride = exportModeOverride ?? pendingExportRequest?.exportModeOverride;
+    const effectiveSegmentsToExport = segmentsToExportOverride ?? pendingExportRequest?.segmentsToExportOverride ?? segmentsToExport;
+    const effectiveExportOptions = exportOptions ?? pendingExportRequest?.exportOptions ?? {};
+    if ((segmentsToExportOverride != null || pendingExportRequest?.segmentsToExportOverride != null) && effectiveSegmentsToExport.length === 0) {
       errorToast(i18n.t('No segments to export.'));
       return;
     }
@@ -1076,26 +1096,27 @@ function App() {
 
     setStreamsSelectorShown(false);
     setExportConfirmOpen(false);
+    setPendingExportRequest(undefined);
 
     if (workingRef.current) return;
     try {
       setWorking({ text: i18n.t('Exporting') });
       let effectiveWillMerge = willMerge;
-      if (exportModeOverride === 'merge' || exportModeOverride === 'merge+separate') {
+      if (effectiveExportModeOverride === 'merge' || effectiveExportModeOverride === 'merge+separate') {
         effectiveWillMerge = effectiveSegmentsToExport.length > 1;
-      } else if (exportModeOverride === 'separate') {
+      } else if (effectiveExportModeOverride === 'separate') {
         effectiveWillMerge = false;
       }
 
       let effectiveAutoDeleteMergedSegments = autoDeleteMergedSegments;
-      if (exportModeOverride === 'merge') {
+      if (effectiveExportModeOverride === 'merge') {
         effectiveAutoDeleteMergedSegments = true;
-      } else if (exportModeOverride === 'merge+separate') {
+      } else if (effectiveExportModeOverride === 'merge+separate') {
         effectiveAutoDeleteMergedSegments = false;
       }
 
       const effectiveAreWeCutting = effectiveSegmentsToExport.some(({ start, end }) => isCuttingStart(start) || isCuttingEnd(end, fileDuration));
-      const shouldUseAccurateCut = exportOptions.accurateCut === true || effectiveAreWeCutting;
+      const shouldUseAccurateCut = effectiveExportOptions.accurateCut === true || effectiveAreWeCutting;
 
       // Special segments-to-chapters mode:
       let chaptersToAdd: Chapter[] | undefined;
@@ -1281,14 +1302,20 @@ function App() {
       setWorking(undefined);
       setProgress(undefined);
     }
-  }, [filePath, numStreamsToCopy, haveInvalidSegs, workingRef, setWorking, segmentsToChaptersOnly, cutFileTemplateOrDefault, generateCutFileNames, cutMultiple, outputDir, customOutDir, fileFormat, fileDuration, isRotationSet, effectiveRotation, copyFileStreams, allFilesMeta, keyframeCut, segmentsToExport, shortestFlag, ffmpegExperimental, preserveMetadata, preserveMetadataOnMerge, preserveMovData, preserveChapters, movFastStart, avoidNegativeTs, paramsByFile, detectedFps, willMerge, exportConfirmEnabled, mainFileFormat, mainStreams, exportExtraStreams, simpleMode, prefersReducedMotion, cleanupChoices, hideAllNotifications, segmentsOrInverse.selected, t, cutMergedFileTemplateOrDefault, segmentsToChapters, invertCutSegments, generateCutMergedFileNames, concatCutSegments, autoDeleteMergedSegments, tryDeleteFiles, nonCopiedExtraStreams, extractStreams, askForCleanupChoices, cleanupFiles, showOsNotification, openCutFinishedDialog, handleExportFailed]);
+  }, [filePath, numStreamsToCopy, haveInvalidSegs, workingRef, setWorking, segmentsToChaptersOnly, cutFileTemplateOrDefault, generateCutFileNames, cutMultiple, outputDir, customOutDir, fileFormat, fileDuration, isRotationSet, effectiveRotation, copyFileStreams, allFilesMeta, keyframeCut, pendingExportRequest, segmentsToExport, shortestFlag, ffmpegExperimental, preserveMetadata, preserveMetadataOnMerge, preserveMovData, preserveChapters, movFastStart, avoidNegativeTs, paramsByFile, detectedFps, willMerge, exportConfirmEnabled, mainFileFormat, mainStreams, exportExtraStreams, simpleMode, prefersReducedMotion, cleanupChoices, hideAllNotifications, segmentsOrInverse.selected, t, cutMergedFileTemplateOrDefault, segmentsToChapters, invertCutSegments, generateCutMergedFileNames, concatCutSegments, autoDeleteMergedSegments, tryDeleteFiles, nonCopiedExtraStreams, extractStreams, askForCleanupChoices, cleanupFiles, showOsNotification, openCutFinishedDialog, handleExportFailed]);
 
   const onExportPress = useCallback(async (exportModeOverride?: ExportMode, segmentsToExportOverride?: SegmentToExport[], exportOptions?: ExportOptions) => {
     if (!filePath) return;
 
-    if (exportModeOverride != null || segmentsToExportOverride != null || !exportConfirmEnabled || exportConfirmOpen) {
+    if (!exportConfirmEnabled || exportConfirmOpen) {
       await onExportConfirm(exportModeOverride, segmentsToExportOverride, exportOptions);
     } else {
+      const nextPendingExportRequest: PendingExportRequest = {};
+      if (exportModeOverride != null) nextPendingExportRequest.exportModeOverride = exportModeOverride;
+      if (segmentsToExportOverride != null) nextPendingExportRequest.segmentsToExportOverride = segmentsToExportOverride;
+      if (exportOptions != null) nextPendingExportRequest.exportOptions = exportOptions;
+
+      setPendingExportRequest(Object.keys(nextPendingExportRequest).length > 0 ? nextPendingExportRequest : undefined);
       setExportConfirmOpen(true);
       setStreamsSelectorShown(false);
     }
@@ -2534,6 +2561,47 @@ function App() {
 
   const rootStyle = useMemo<CSSProperties>(() => ({ ...baseColorStyle, display: 'flex', flexDirection: 'column', height: '100vh', transition: darkModeTransition }), [baseColorStyle]);
 
+  const bottomBarProps: BottomBarProps = {
+    zoom,
+    hasVideo,
+    isRotationSet,
+    rotation,
+    increaseRotation,
+    cleanupFilesDialog,
+    seekAbs,
+    currentCutSeg,
+    jumpCutEnd,
+    jumpCutStart,
+    jumpTimelineStart,
+    jumpTimelineEnd,
+    startTimeOffset,
+    setCutTime,
+    playing,
+    shortStep,
+    seekClosestKeyframe,
+    togglePlay,
+    showThumbnails,
+    toggleShowThumbnails,
+    toggleWaveformMode,
+    waveformMode,
+    hasAudio,
+    keyframesEnabled,
+    toggleShowKeyframes,
+    detectedFps,
+    isFileOpened,
+    darkMode,
+    outputPlaybackRate,
+    setOutputPlaybackRate,
+    formatTimecode,
+    parseTimecode,
+    playbackRate,
+    currentFrame,
+    displayTime,
+    fileDurationNonZero,
+    getFrameCount,
+    selectedSegments,
+  };
+
   return (
     <Theme appearance={darkMode ? 'dark' : 'light'} accentColor="cyan">
       <MotionConfig reducedMotion={reducedMotion}>
@@ -2688,60 +2756,8 @@ function App() {
                     onWheel={onTimelineWheel}
                     darkMode={darkMode}
                     setHoveringTime={setHoveringTime}
-                  />
-
-                  <BottomBar
-                    zoom={zoom}
-                    setZoom={zoomAbs}
-                    timelineToggleComfortZoom={timelineToggleComfortZoom}
-                    hasVideo={hasVideo}
-                    isRotationSet={isRotationSet}
-                    rotation={rotation}
-                    areWeCutting={areWeCutting}
-                    increaseRotation={increaseRotation}
-                    cleanupFilesDialog={cleanupFilesDialog}
-                    captureSnapshot={captureSnapshot}
-                    onExportPress={onExportPress}
-                    segmentsToExport={segmentsToExport}
-                    seekAbs={seekAbs}
-                    currentSegIndexSafe={currentSegIndexSafe}
-                    cutSegments={cutSegments}
-                    currentCutSeg={currentCutSeg}
-                    selectedSegments={selectedSegments}
-                    setCutStart={setCutStart}
-                    setCutEnd={setCutEnd}
-                    setCurrentSegIndex={setCurrentSegIndex}
-                    jumpCutEnd={jumpCutEnd}
-                    jumpCutStart={jumpCutStart}
-                    jumpTimelineStart={jumpTimelineStart}
-                    jumpTimelineEnd={jumpTimelineEnd}
-                    startTimeOffset={startTimeOffset}
-                    setCutTime={setCutTime}
-                    playing={playing}
-                    shortStep={shortStep}
-                    seekClosestKeyframe={seekClosestKeyframe}
-                    togglePlay={togglePlay}
-                    showThumbnails={showThumbnails}
-                    toggleShowThumbnails={toggleShowThumbnails}
-                    toggleWaveformMode={toggleWaveformMode}
-                    waveformMode={waveformMode}
-                    hasAudio={hasAudio}
-                    keyframesEnabled={keyframesEnabled}
-                    toggleShowKeyframes={toggleShowKeyframes}
-                    detectedFps={detectedFps}
-                    toggleLoopSelectedSegments={toggleLoopSelectedSegments}
-                    isFileOpened={isFileOpened}
-                    darkMode={darkMode}
-                    outputPlaybackRate={outputPlaybackRate}
-                    setOutputPlaybackRate={setOutputPlaybackRate}
-                    formatTimecode={formatTimecode}
-                    parseTimecode={parseTimecode}
-                    playbackRate={playbackRate}
-                    currentFrame={currentFrame}
-                    playbackMode={playbackMode}
-                    displayTime={displayTime}
-                    fileDurationNonZero={fileDurationNonZero}
-                    getFrameCount={getFrameCount}
+                    renderPrimaryControls={({ leadingControls, trailingControls }) => <BottomBarFirstRow controls={bottomBarProps} leadingControls={leadingControls} trailingControls={trailingControls} />}
+                    footerControls={<BottomBarTimeRow controls={bottomBarProps} />}
                   />
                 </div>
 
@@ -2749,7 +2765,7 @@ function App() {
 
                 {/* Dialogs */}
 
-                <ExportConfirm areWeCutting={areWeCutting} segmentsOrInverse={segmentsOrInverse} segmentsToExport={segmentsToExport} willMerge={willMerge} visible={exportConfirmOpen} onClosePress={closeExportConfirm} onExportConfirm={onExportConfirm} renderOutFmt={renderOutFmt} outputDir={outputDir} numStreamsTotal={numStreamsTotal} numStreamsToCopy={numStreamsToCopy} onShowStreamsSelectorClick={handleShowStreamsSelectorClick} outFormat={fileFormat} cutFileTemplate={cutFileTemplateOrDefault} cutMergedFileTemplate={cutMergedFileTemplateOrDefault} generateCutFileNames={generateCutFileNames} generateCutMergedFileNames={generateCutMergedFileNames} currentSegIndexSafe={currentSegIndexSafe} mainCopiedThumbnailStreams={mainCopiedThumbnailStreams} needSmartCut={needSmartCut} isEncoding={isEncoding} encBitrate={encBitrate} setEncBitrate={setEncBitrate} toggleSettings={toggleSettings} outputPlaybackRate={outputPlaybackRate} lossyMode={lossyMode} neighbouringKeyFrames={neighbouringKeyFrames} findNearestKeyFrameTime={findNearestKeyFrameTime} />
+                <ExportConfirm areWeCutting={exportConfirmAreWeCutting} segmentsOrInverse={segmentsOrInverse} segmentsToExport={exportConfirmSegmentsToExport} willMerge={exportConfirmWillMerge} visible={exportConfirmOpen} onClosePress={closeExportConfirm} onExportConfirm={onExportConfirm} renderOutFmt={renderOutFmt} outputDir={outputDir} numStreamsTotal={numStreamsTotal} numStreamsToCopy={numStreamsToCopy} onShowStreamsSelectorClick={handleShowStreamsSelectorClick} outFormat={fileFormat} cutFileTemplate={cutFileTemplateOrDefault} cutMergedFileTemplate={cutMergedFileTemplateOrDefault} generateCutFileNames={generateCutFileNames} generateCutMergedFileNames={generateCutMergedFileNames} currentSegIndexSafe={currentSegIndexSafe} mainCopiedThumbnailStreams={mainCopiedThumbnailStreams} needSmartCut={exportConfirmNeedSmartCut} isEncoding={exportConfirmIsEncoding} encBitrate={encBitrate} setEncBitrate={setEncBitrate} toggleSettings={toggleSettings} outputPlaybackRate={outputPlaybackRate} lossyMode={lossyMode} neighbouringKeyFrames={neighbouringKeyFrames} findNearestKeyFrameTime={findNearestKeyFrameTime} />
 
                 <Dialog.Root open={streamsSelectorShown} onOpenChange={setStreamsSelectorShown}>
                   <Dialog.Portal>
