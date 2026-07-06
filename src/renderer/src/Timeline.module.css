@@ -118,6 +118,30 @@
   font-size: 15px;
 }
 
+.zoom-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.zoom-button:hover:not(:disabled) {
+  color: var(--gray-12);
+}
+
+.zoom-button:disabled {
+  cursor: default;
+  opacity: .38;
+}
+
 .zoom-control input {
   width: min(180px, 24vw);
   accent-color: var(--cyan-9);

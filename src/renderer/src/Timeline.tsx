@@ -759,6 +759,12 @@ function Timeline({
     const value = parseInt(e.target.value, 10);
     setZoom(() => 2 ** value);
   }, [setZoom]);
+  const onZoomOutClick = useCallback(() => {
+    setZoom((currentZoom) => currentZoom / 2);
+  }, [setZoom]);
+  const onZoomInClick = useCallback(() => {
+    setZoom((currentZoom) => currentZoom * 2);
+  }, [setZoom]);
 
   const onSplitCurrentSegmentPress = useCallback(() => {
     splitCurrentSegment(playheadSourceTime);
@@ -832,9 +838,13 @@ function Timeline({
 
   const trailingControls = (
     <div className={styles['zoom-control']} title={t('Zoom')}>
-      <FaSearchMinus />
+      <button type="button" className={styles['zoom-button']} title={t('Zoom out timeline')} aria-label={t('Zoom out timeline')} onClick={onZoomOutClick} disabled={zoom <= 1}>
+        <FaSearchMinus />
+      </button>
       <input type="range" min={0} max={maxZoomPower} step={1} value={zoomPower} onChange={onZoomSliderChange} />
-      <FaSearchPlus />
+      <button type="button" className={styles['zoom-button']} title={t('Zoom in timeline')} aria-label={t('Zoom in timeline')} onClick={onZoomInClick} disabled={zoom >= zoomMax}>
+        <FaSearchPlus />
+      </button>
     </div>
   );
 
