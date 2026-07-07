@@ -614,18 +614,12 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
         return { path: finalOutPath, created: true };
       };
 
-      const cutNormalPart = async () => {
-        invariant(outFormat != null);
-        await losslessCutSingle({
-          cutFrom: desiredCutFrom, cutTo, chaptersPath, outPath: finalOutPath, copyFileStreams, keyframeCut: false, avoidNegativeTs: undefined, fileDuration, rotation, allFilesMeta, outFormat, shortestFlag, ffmpegExperimental, preserveMetadata, preserveMovData, preserveChapters, movFastStart, paramsByFile, onProgress: (progress) => onSingleProgress(i, progress),
-        });
-        return { path: finalOutPath, created: true };
-      };
-
       if (!shouldEncodeSegment) {
         // simple lossless cut
         return cutLosslessPart();
       }
+
+      let cutEncodeWholePartFallback: (() => Promise<{ path: string, created: boolean }>) | undefined;
 
       try {
         // we are probably encoding (`isEncoding`: true, smart cut, accurate timeline cut or lossy mode)
@@ -663,6 +657,7 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
           await cutEncodeSmartPartWrapper({ cutFrom: desiredCutFrom, cutTo, outPath: finalOutPath });
           return { path: finalOutPath, created: true };
         };
+        cutEncodeWholePartFallback = cutEncodeWholePart;
 
         if (lossyMode) {
           console.log('Lossy mode: cutting/encoding the whole segment', { desiredCutFrom, cutTo });
@@ -723,8 +718,13 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
         }
       } catch (err) {
         if (!accurateCut || lossyMode != null) throw err;
-        console.warn('Accurate cut failed, falling back to normal cut', err);
-        return cutNormalPart();
+        if (!cutEncodeWholePartFallback) {
+          console.warn('Accurate cut failed before whole-segment encoding fallback was available', err);
+          throw err;
+        }
+        console.warn('Accurate cut failed, falling back to encoding the whole segment', err);
+        await tryDeleteFiles([finalOutPath]);
+        return cutEncodeWholePartFallback();
       }
     };
 
