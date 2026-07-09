@@ -687,9 +687,30 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
           ? getSuffixedOutPath({ customOutDir, filePath, nameSuffix: `smartcut-segment-copy-${i}${ext}` })
           : finalOutPath;
 
-        // for smart cut we need to use keyframe cut here, and no avoid_negative_ts
+        // Keep smart-cut temp files structurally simple. Chapters/faststart/metadata
+        // are applied to the final segment after concat; adding them to only one
+        // temp file can make concat see mismatched streams and force slow fallback.
         await losslessCutSingle({
-          cutFrom: losslessCutFrom, cutTo, chaptersPath, outPath: losslessPartOutPath, copyFileStreams: copyFileStreamsFiltered, keyframeCut: true, avoidNegativeTs: undefined, fileDuration, rotation, allFilesMeta, outFormat, shortestFlag, ffmpegExperimental, preserveMetadata, preserveMovData, preserveChapters, movFastStart, paramsByFile, videoTimebase, onProgress,
+          cutFrom: losslessCutFrom,
+          cutTo,
+          chaptersPath: segmentNeedsSmartCut ? undefined : chaptersPath,
+          outPath: losslessPartOutPath,
+          copyFileStreams: copyFileStreamsFiltered,
+          keyframeCut: true,
+          avoidNegativeTs: undefined,
+          fileDuration,
+          rotation,
+          allFilesMeta,
+          outFormat,
+          shortestFlag,
+          ffmpegExperimental,
+          preserveMetadata: segmentNeedsSmartCut ? 'none' : preserveMetadata,
+          preserveMovData: segmentNeedsSmartCut ? false : preserveMovData,
+          preserveChapters: segmentNeedsSmartCut ? false : preserveChapters,
+          movFastStart: segmentNeedsSmartCut ? false : movFastStart,
+          paramsByFile,
+          videoTimebase,
+          onProgress,
         });
 
         // We don't need to concat, just return the single cut file (we may need smart cut in other segments though)
@@ -708,10 +729,12 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
           console.log('Cutting/encoding smart part', { from: desiredCutFrom, to: encodeCutToSafe });
           await cutEncodeSmartPartWrapper({ cutFrom: desiredCutFrom, cutTo: encodeCutToSafe, outPath: smartCutEncodedPartOutPath });
 
-          // need to re-read streams because indexes may have changed. Using main file as source of streams and metadata
-          const { streams: streamsAfterCut } = await readFileFfprobeMeta(losslessPartOutPath);
+          // The concat demuxer's stream layout follows the first file in the list.
+          // Use the encoded prefix for mapping, otherwise metadata/chapters in the
+          // copied tail can make us map streams that do not exist in concat input 0.
+          const { streams: streamsAfterCut } = await readFileFfprobeMeta(smartCutEncodedPartOutPath);
 
-          await concatFiles({ paths: smartCutSegmentsToConcat, outDir: outputDir, outPath: finalOutPath, metadataFromPath: losslessPartOutPath, outFormat, includeAllStreams: true, streams: streamsAfterCut, ffmpegExperimental, preserveMovData, movFastStart, chapters, preserveMetadataOnMerge, videoTimebase, onProgress: onConcatProgress });
+          await concatFiles({ paths: smartCutSegmentsToConcat, outDir: outputDir, outPath: finalOutPath, metadataFromPath: smartCutEncodedPartOutPath, outFormat, includeAllStreams: true, streams: streamsAfterCut, ffmpegExperimental, preserveMovData, movFastStart, chapters, preserveMetadataOnMerge, videoTimebase, onProgress: onConcatProgress });
           return { path: finalOutPath, created: true };
         } finally {
           await tryDeleteFiles(smartCutSegmentsToConcat);
