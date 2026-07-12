@@ -5,7 +5,6 @@ import { FaMouse } from 'react-icons/fa';
 import { useTranslation, Trans } from 'react-i18next';
 
 import SetCutpointButton from './components/SetCutpointButton';
-import SimpleModeButton from './components/SimpleModeButton';
 import useUserSettings from './hooks/useUserSettings';
 import type { StateSegment } from './types';
 import type { KeyBinding } from '../../common/types';
@@ -51,7 +50,7 @@ function NoFileLoaded({ mifiLink, currentCutSeg, onClick, darkMode, keyBindingBy
   keyBindingByAction: Record<string, KeyBinding>,
 }) {
   const { t } = useTranslation();
-  const { simpleMode, segmentMouseModifierKey } = useUserSettings();
+  const { segmentMouseModifierKey } = useUserSettings();
   const [dragging, setDragging] = useState(false);
 
   const currentCutSegOrDefault = useMemo(() => currentCutSeg ?? { segColorIndex: 0 }, [currentCutSeg]);
@@ -74,14 +73,6 @@ function NoFileLoaded({ mifiLink, currentCutSeg, onClick, darkMode, keyBindingBy
 
       <div style={{ fontSize: '1.3em', color: 'var(--gray-11)' }}>
         <Trans><SetCutpointButton currentCutSeg={currentCutSegOrDefault} side="start" style={{ verticalAlign: 'middle' }} /> <SetCutpointButton currentCutSeg={currentCutSegOrDefault} side="end" style={{ verticalAlign: 'middle' }} />, <Keys keys={keyBindingByAction['setCutStart']?.keys} /> <Keys keys={keyBindingByAction['setCutEnd']?.keys} /> or <span><kbd style={{ marginRight: '.1em' }}>{getModifier(segmentMouseModifierKey)}</kbd></span>+<FaMouse style={{ marginRight: '.1em', verticalAlign: 'middle' }} /> to set cutpoints</Trans>
-      </div>
-
-      <div style={{ fontSize: '1.3em', color: 'var(--gray-11)' }} role="button" onClick={(e) => e.stopPropagation()}>
-        {simpleMode ? (
-          <Trans><SimpleModeButton style={{ verticalAlign: 'middle' }} /> to show advanced view</Trans>
-        ) : (
-          <Trans><SimpleModeButton style={{ verticalAlign: 'middle' }} /> to show simple view</Trans>
-        )}
       </div>
 
       {mifiLink && typeof mifiLink === 'object' && 'loadUrl' in mifiLink && typeof mifiLink.loadUrl === 'string' && mifiLink.loadUrl ? (

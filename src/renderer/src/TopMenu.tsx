@@ -51,7 +51,7 @@ function TopMenu({
   toggleDarkMode: () => void,
 }) {
   const { t } = useTranslation();
-  const { customOutDir, setCustomOutDir, simpleMode, outFormatLocked, setOutFormatLocked, darkMode } = useUserSettings();
+  const { customOutDir, setCustomOutDir, outFormatLocked, setOutFormatLocked, darkMode } = useUserSettings();
   const actionTitle = useActionTitle();
   const workingDirButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -132,17 +132,15 @@ function TopMenu({
 
       {renderOutFmt(outFmtStyle)}
 
-      {!simpleMode && (isCustomFormatSelected || outFormatLocked) && renderFormatLock()}
+      {(isCustomFormatSelected || outFormatLocked) && renderFormatLock()}
 
       {filePath && (
         <ExportModeButton selectedSegments={selectedSegments} style={exportModeStyle} />
       )}
 
-      {!simpleMode && (
-        <Button onClick={toggleDarkMode} title={actionTitle(t('Toggle dark mode'), 'toggleDarkMode')}>
-          <DarkMode style={{ verticalAlign: 'middle', fontSize: '.9em' }} />
-        </Button>
-      )}
+      <Button onClick={toggleDarkMode} title={actionTitle(t('Toggle dark mode'), 'toggleDarkMode')}>
+        <DarkMode style={{ verticalAlign: 'middle', fontSize: '.9em' }} />
+      </Button>
 
       <Button onClick={toggleSettings} title={actionTitle(t('Settings'), 'toggleSettings')}>
         <IoIosSettings style={{ fontSize: '1em', verticalAlign: 'bottom' }} />

@@ -1,65 +1,24 @@
-import type { CSSProperties, ClipboardEvent, Dispatch, FormEvent, ReactNode, SetStateAction } from 'react';
+import type { CSSProperties, ClipboardEvent, FormEvent, ReactNode } from 'react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { motion } from 'motion/react';
 import { MdRotate90DegreesCcw } from 'react-icons/md';
 import { useTranslation } from 'react-i18next';
 import { IoMdKey, IoMdSpeedometer } from 'react-icons/io';
-import { FaYinYang, FaTrashAlt, FaStepBackward, FaStepForward, FaCaretLeft, FaCaretRight, FaPause, FaPlay, FaImages, FaKey, FaExclamationTriangle } from 'react-icons/fa';
+import { FaTrashAlt, FaStepBackward, FaStepForward, FaCaretLeft, FaCaretRight, FaPause, FaPlay, FaImages, FaKey } from 'react-icons/fa';
 import { GiSoundWaves } from 'react-icons/gi';
 // import useTraceUpdate from 'use-trace-update';
 import invariant from 'tiny-invariant';
 
 import { primaryTextColor, primaryColor, darkModeTransition, dangerColor } from './colors';
 import SegmentCutpointButton from './components/SegmentCutpointButton';
-import ToggleExportConfirm from './components/ToggleExportConfirm';
-
-import SimpleModeButton from './components/SimpleModeButton';
 import { mirrorTransform } from './util';
-import getSwal from './swal';
 import { useSegColors } from './contexts';
 import { isExactDurationMatch } from './util/duration';
-import useUserSettings from './hooks/useUserSettings';
 import useActionTitle from './hooks/useActionTitle';
 import { askForPlaybackRate, checkAppPath } from './dialogs';
 import type { FormatTimecode, GetFrameCount, ParseTimecode, StateSegment } from './types';
 import type { WaveformMode } from '../../common/types';
 import type { Frame } from './ffmpeg';
 import mainApi from './mainApi';
-
-
-// eslint-disable-next-line react/display-name
-const InvertCutModeButton = memo(({ invertCutSegments, setInvertCutSegments }: { invertCutSegments: boolean, setInvertCutSegments: Dispatch<SetStateAction<boolean>> }) => {
-  const { t } = useTranslation();
-
-  const onYinYangClick = useCallback(() => {
-    setInvertCutSegments((v) => {
-      const newVal = !v;
-      getSwal().toast.fire({
-        title: newVal
-          ? t('When you export, selected segments on the timeline will be REMOVED - the surrounding areas will be KEPT')
-          : t('When you export, selected segments on the timeline will be KEPT - the surrounding areas will be REMOVED.'),
-      });
-      return newVal;
-    });
-  }, [setInvertCutSegments, t]);
-
-  return (
-    <div>
-      <motion.div
-        animate={{ rotateX: invertCutSegments ? 0 : 180 }}
-        transition={{ duration: 0.3 }}
-      >
-        <FaYinYang
-          role="button"
-          title={invertCutSegments ? t('Discard selected segments') : t('Keep selected segments')}
-          style={{ display: 'block', fontSize: '1.5em', color: invertCutSegments ? dangerColor : undefined }}
-          onClick={onYinYangClick}
-        />
-      </motion.div>
-    </div>
-  );
-});
-
 
 // eslint-disable-next-line react/display-name
 const CutTimeInput = memo(({ disabled, darkMode, cutTime, setCutTime, startTimeOffset, seekAbs, currentCutSeg, isStart, formatTimecode, parseTimecode }: {
@@ -318,7 +277,6 @@ export function BottomBarFirstRow({ controls, leadingControls, trailingControls 
   } = controls;
 
   const { t } = useTranslation();
-  const { invertCutSegments, setInvertCutSegments, simpleMode, toggleSimpleMode, exportConfirmEnabled } = useUserSettings();
   const actionTitle = useActionTitle();
 
   const rotationStr = `${rotation}°`;
@@ -355,7 +313,7 @@ export function BottomBarFirstRow({ controls, leadingControls, trailingControls 
     playbackRateRef.current?.animate([{ transform: 'scale(2)', color: 'var(--gray-12)', backgroundColor: playbackRate === 1 ? 'var(--cyan-10)' : (playbackRate < 1 ? 'var(--yellow-8)' : 'var(--orange-10)') }, {}], { duration: 200 });
   }, [playbackRate]);
 
-  const fpsControl = isFileOpened && !simpleMode ? (
+  const fpsControl = isFileOpened ? (
     <div style={{ whiteSpace: 'nowrap' }}>
       <IoMdSpeedometer title={t('Change FPS')} style={{ fontSize: '1.3em', verticalAlign: 'middle' }} role="button" onClick={handleChangePlaybackRateClick} />
 
@@ -365,7 +323,7 @@ export function BottomBarFirstRow({ controls, leadingControls, trailingControls 
     </div>
   ) : undefined;
 
-  const rotationControl = isFileOpened && !simpleMode && hasVideo ? (
+  const rotationControl = isFileOpened && hasVideo ? (
     <div onClick={increaseRotation} role="button" style={{ whiteSpace: 'nowrap' }}>
       <MdRotate90DegreesCcw
         style={{ fontSize: '1.3em', verticalAlign: 'middle', color: isRotationSet ? primaryTextColor : undefined }}
@@ -383,69 +341,49 @@ export function BottomBarFirstRow({ controls, leadingControls, trailingControls 
       <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
         {leadingControls}
 
-        {!simpleMode && (
+        {hasAudio && (
+          <GiSoundWaves
+            style={{ fontSize: '1.6em', padding: '0 .1em', color: waveformMode != null ? primaryTextColor : undefined }}
+            role="button"
+            title={actionTitle(t('Show waveform'), 'toggleWaveformMode')}
+            onClick={() => toggleWaveformMode()}
+          />
+        )}
+        {hasVideo && (
           <>
-            {hasAudio && (
-              <GiSoundWaves
-                style={{ fontSize: '1.6em', padding: '0 .1em', color: waveformMode != null ? primaryTextColor : undefined }}
-                role="button"
-                title={actionTitle(t('Show waveform'), 'toggleWaveformMode')}
-                onClick={() => toggleWaveformMode()}
-              />
-            )}
-            {hasVideo && (
-              <>
-                <FaImages
-                  style={{ fontSize: '1.1em', padding: '0 .2em', color: showThumbnails ? primaryTextColor : undefined }}
-                  role="button"
-                  title={actionTitle(t('Show thumbnails'), 'toggleShowThumbnails')}
-                  onClick={toggleShowThumbnails}
-                />
+            <FaImages
+              style={{ fontSize: '1.1em', padding: '0 .2em', color: showThumbnails ? primaryTextColor : undefined }}
+              role="button"
+              title={actionTitle(t('Show thumbnails'), 'toggleShowThumbnails')}
+              onClick={toggleShowThumbnails}
+            />
 
-                <FaKey
-                  style={{ fontSize: '1em', padding: '0 .2em', color: keyframesEnabled ? primaryTextColor : undefined }}
-                  role="button"
-                  title={actionTitle(t('Show keyframes'), 'toggleShowKeyframes')}
-                  onClick={toggleShowKeyframes}
-                />
-              </>
-            )}
+            <FaKey
+              style={{ fontSize: '1em', padding: '0 .2em', color: keyframesEnabled ? primaryTextColor : undefined }}
+              role="button"
+              title={actionTitle(t('Show keyframes'), 'toggleShowKeyframes')}
+              onClick={toggleShowKeyframes}
+            />
           </>
         )}
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '.45em', marginLeft: '.8em', minWidth: 0 }}>
-          <InvertCutModeButton invertCutSegments={invertCutSegments} setInvertCutSegments={setInvertCutSegments} />
-
-          <div style={{ display: 'flex', alignItems: 'center' }}>
-            <SimpleModeButton />
-
-            {simpleMode && (
-              <div role="button" onClick={toggleSimpleMode} style={{ fontSize: '.8em', marginLeft: '.2em', whiteSpace: 'nowrap' }}>{t('Toggle advanced view')}</div>
-            )}
-          </div>
-
-          {isFileOpened && !simpleMode && (
-            <div ref={playbackRateRef} title={t('Playback rate')} style={{ color: 'var(--gray-11)', fontSize: '.7em', borderRadius: '.5em' }}>{playbackRate.toFixed(1)}</div>
-          )}
-        </div>
+        {isFileOpened && (
+          <div ref={playbackRateRef} title={t('Playback rate')} style={{ color: 'var(--gray-11)', fontSize: '.7em', borderRadius: '.5em', marginLeft: '.8em' }}>{playbackRate.toFixed(1)}</div>
+        )}
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        {!simpleMode && (
-          <>
-            <FaStepBackward
-              size={16}
-              style={{ flexShrink: 0 }}
-              title={actionTitle(t('Jump to start of video'), 'jumpTimelineStart')}
-              role="button"
-              onClick={jumpTimelineStart}
-            />
+        <FaStepBackward
+          size={16}
+          style={{ flexShrink: 0 }}
+          title={actionTitle(t('Jump to start of video'), 'jumpTimelineStart')}
+          role="button"
+          onClick={jumpTimelineStart}
+        />
 
-            <SegmentCutpointButton currentCutSeg={currentCutSeg} side="start" Icon={FaStepBackward} onClick={jumpCutStart} title={actionTitle(t('Jump to current segment\'s start time'), 'jumpCutStart')} style={{ marginRight: 5 }} />
-          </>
-        )}
+        <SegmentCutpointButton currentCutSeg={currentCutSeg} side="start" Icon={FaStepBackward} onClick={jumpCutStart} title={actionTitle(t('Jump to current segment\'s start time'), 'jumpCutStart')} style={{ marginRight: 5 }} />
 
-        {!simpleMode && <CutTimeInput disabled={!isFileOpened} darkMode={darkMode} currentCutSeg={currentCutSeg} startTimeOffset={startTimeOffset} seekAbs={seekAbs} cutTime={currentCutSeg?.start} setCutTime={setCutTime} isStart formatTimecode={formatTimecode} parseTimecode={parseTimecode} />}
+        <CutTimeInput disabled={!isFileOpened} darkMode={darkMode} currentCutSeg={currentCutSeg} startTimeOffset={startTimeOffset} seekAbs={seekAbs} cutTime={currentCutSeg?.start} setCutTime={setCutTime} isStart formatTimecode={formatTimecode} parseTimecode={parseTimecode} />
 
         {keyframesEnabled && (
           <IoMdKey
@@ -457,29 +395,25 @@ export function BottomBarFirstRow({ controls, leadingControls, trailingControls 
           />
         )}
 
-        {!simpleMode && (
-          <FaCaretLeft
-            style={{ flexShrink: 0, marginLeft: -6, marginRight: -4 }}
-            size={28}
-            role="button"
-            title={actionTitle(t('One frame back'), 'seekPreviousFrame')}
-            onClick={() => shortStep(-1)}
-          />
-        )}
+        <FaCaretLeft
+          style={{ flexShrink: 0, marginLeft: -6, marginRight: -4 }}
+          size={28}
+          role="button"
+          title={actionTitle(t('One frame back'), 'seekPreviousFrame')}
+          onClick={() => shortStep(-1)}
+        />
 
         <div title={actionTitle(t('Play/pause'), 'togglePlayResetSpeed')} role="button" onClick={() => togglePlay()} style={{ ...playStyle, margin: '.1em .1em 0 .2em', background: primaryColor }}>
           <PlayPause style={{ fontSize: '.9em' }} />
         </div>
 
-        {!simpleMode && (
-          <FaCaretRight
-            style={{ flexShrink: 0, marginRight: -6, marginLeft: -4 }}
-            size={28}
-            role="button"
-            title={actionTitle(t('One frame forward'), 'seekNextFrame')}
-            onClick={() => shortStep(1)}
-          />
-        )}
+        <FaCaretRight
+          style={{ flexShrink: 0, marginRight: -6, marginLeft: -4 }}
+          size={28}
+          role="button"
+          title={actionTitle(t('One frame forward'), 'seekNextFrame')}
+          onClick={() => shortStep(1)}
+        />
 
         {keyframesEnabled && (
           <IoMdKey
@@ -491,25 +425,21 @@ export function BottomBarFirstRow({ controls, leadingControls, trailingControls 
           />
         )}
 
-        {!simpleMode && <CutTimeInput disabled={!isFileOpened} darkMode={darkMode} currentCutSeg={currentCutSeg} startTimeOffset={startTimeOffset} seekAbs={seekAbs} cutTime={currentCutSeg?.end} setCutTime={setCutTime} formatTimecode={formatTimecode} parseTimecode={parseTimecode} />}
+        <CutTimeInput disabled={!isFileOpened} darkMode={darkMode} currentCutSeg={currentCutSeg} startTimeOffset={startTimeOffset} seekAbs={seekAbs} cutTime={currentCutSeg?.end} setCutTime={setCutTime} formatTimecode={formatTimecode} parseTimecode={parseTimecode} />
 
-        {!simpleMode && (
-          <>
-            <SegmentCutpointButton currentCutSeg={currentCutSeg} side="end" Icon={FaStepForward} onClick={jumpCutEnd} title={actionTitle(t('Jump to current segment\'s end time'), 'jumpCutEnd')} style={{ marginLeft: 5 }} />
+        <SegmentCutpointButton currentCutSeg={currentCutSeg} side="end" Icon={FaStepForward} onClick={jumpCutEnd} title={actionTitle(t('Jump to current segment\'s end time'), 'jumpCutEnd')} style={{ marginLeft: 5 }} />
 
-            <FaStepForward
-              size={16}
-              style={{ flexShrink: 0 }}
-              title={actionTitle(t('Jump to end of video'), 'jumpTimelineEnd')}
-              role="button"
-              onClick={jumpTimelineEnd}
-            />
-          </>
-        )}
+        <FaStepForward
+          size={16}
+          style={{ flexShrink: 0 }}
+          title={actionTitle(t('Jump to end of video'), 'jumpTimelineEnd')}
+          role="button"
+          onClick={jumpTimelineEnd}
+        />
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '.55em', minWidth: 0 }}>
-        {!simpleMode && isFileOpened && (
+        {isFileOpened && (
           <FaTrashAlt
             title={actionTitle(t('Close file and clean up'), 'cleanupFilesDialog')}
             style={{ fontSize: '1em', color: dangerColor }}
@@ -517,9 +447,6 @@ export function BottomBarFirstRow({ controls, leadingControls, trailingControls 
             role="button"
           />
         )}
-
-        {!exportConfirmEnabled && (<FaExclamationTriangle style={{ color: dangerColor }} title={t('Export options screen is disabled, and you will not see any important notices or warnings.')} />)}
-        {(!simpleMode || !exportConfirmEnabled) && <ToggleExportConfirm />}
 
         {fpsControl}
         {rotationControl}

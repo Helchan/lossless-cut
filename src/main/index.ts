@@ -67,6 +67,7 @@ let filesToOpen: string[] = [];
 let mainWindow: BrowserWindow | null;
 
 let askBeforeClose = false;
+let exportInProgress = false;
 let rendererReady = false;
 let newVersion: string | undefined;
 
@@ -186,10 +187,26 @@ function createWindow() {
     // in an array if your app supports multi windows, this is the time
     // when you should delete the corresponding element.
     mainWindow = null;
+    exportInProgress = false;
+  });
+
+  mainWindow.webContents.on('render-process-gone', () => {
+    exportInProgress = false;
   });
 
   // https://stackoverflow.com/questions/39574636/prompt-to-save-quit-before-closing-window/47434365
   mainWindow.on('close', (e) => {
+    if (exportInProgress) {
+      e.preventDefault();
+      assert(mainWindow);
+      electron.dialog.showMessageBoxSync(mainWindow, {
+        type: 'info',
+        buttons: ['OK'],
+        title: i18n.t('Export in progress'),
+        message: i18n.t('Wait for the active export and cleanup to finish before quitting.'),
+      });
+      return;
+    }
     if (!askBeforeClose) return;
 
     assert(mainWindow);
@@ -351,6 +368,9 @@ async function init() {
 
     ipcMain.on('setAskBeforeClose', (_e, val) => {
       askBeforeClose = val;
+    });
+    ipcMain.on('setExportInProgress', (_e, val) => {
+      exportInProgress = val === true;
     });
 
     ipcMain.on('setLanguage', (_e, newLanguage) => changeLanguage(newLanguage));

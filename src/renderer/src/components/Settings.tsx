@@ -1,6 +1,6 @@
 import type { CSSProperties, ChangeEventHandler, TdHTMLAttributes } from 'react';
 import { memo, useCallback, useMemo } from 'react';
-import { FaYinYang, FaKeyboard, FaGlobe, FaBroom, FaCogs, FaHashtag, FaClock, FaFolder, FaFile, FaTimes } from 'react-icons/fa';
+import { FaKeyboard, FaGlobe, FaBroom, FaCogs, FaHashtag, FaClock, FaFolder, FaFile, FaTimes } from 'react-icons/fa';
 import { useTranslation } from 'react-i18next';
 import invariant from 'tiny-invariant';
 
@@ -22,7 +22,6 @@ import ButtonRaw from './Button';
 import { getModifierKeyNames } from '../hooks/useTimelineScroll';
 import type { TunerType } from '../types';
 import Truncated from './Truncated';
-import { dangerColor } from '../colors';
 import OutDirSelector from './OutDirSelector.js';
 
 // eslint-disable-next-line react/jsx-props-no-spreading
@@ -75,7 +74,7 @@ function Settings({
 }) {
   const { t } = useTranslation();
 
-  const { customOutDir, keyframeCut, toggleKeyframeCut, timecodeFormat, setTimecodeFormat, invertCutSegments, setInvertCutSegments, askBeforeClose, setAskBeforeClose, enableImportChapters, setEnableImportChapters, enableAskForFileOpenAction, setEnableAskForFileOpenAction, autoSaveProjectFile, setAutoSaveProjectFile, invertTimelineScroll, setInvertTimelineScroll, language, setLanguage, hideNotifications, setHideNotifications, hideOsNotifications, setHideOsNotifications, autoLoadTimecode, setAutoLoadTimecode, enableAutoHtml5ify, setEnableAutoHtml5ify, customFfPath, setCustomFfPath, storeProjectInWorkingDir, mouseWheelZoomModifierKey, setMouseWheelZoomModifierKey, mouseWheelFrameSeekModifierKey, setMouseWheelFrameSeekModifierKey, mouseWheelKeyframeSeekModifierKey, setMouseWheelKeyframeSeekModifierKey, segmentMouseModifierKey, setSegmentMouseModifierKey, captureFrameMethod, setCaptureFrameMethod, captureFrameQuality, setCaptureFrameQuality, captureFrameFileNameFormat, setCaptureFrameFileNameFormat, enableNativeHevc, setEnableNativeHevc, enableUpdateCheck, setEnableUpdateCheck, allowMultipleInstances, setAllowMultipleInstances, preferStrongColors, setPreferStrongColors, treatInputFileModifiedTimeAsStart, setTreatInputFileModifiedTimeAsStart, treatOutputFileModifiedTimeAsStart, setTreatOutputFileModifiedTimeAsStart, exportConfirmEnabled, toggleExportConfirmEnabled, storeWindowBounds, setStoreWindowBounds, reducedMotion, setReducedMotion, ffmpegHwaccel, setFfmpegHwaccel } = useUserSettings();
+  const { customOutDir, keyframeCut, toggleKeyframeCut, timecodeFormat, setTimecodeFormat, askBeforeClose, setAskBeforeClose, enableImportChapters, setEnableImportChapters, enableAskForFileOpenAction, setEnableAskForFileOpenAction, autoSaveProjectFile, setAutoSaveProjectFile, invertTimelineScroll, setInvertTimelineScroll, language, setLanguage, hideNotifications, setHideNotifications, hideOsNotifications, setHideOsNotifications, autoLoadTimecode, setAutoLoadTimecode, enableAutoHtml5ify, setEnableAutoHtml5ify, customFfPath, setCustomFfPath, storeProjectInWorkingDir, mouseWheelZoomModifierKey, setMouseWheelZoomModifierKey, mouseWheelFrameSeekModifierKey, setMouseWheelFrameSeekModifierKey, mouseWheelKeyframeSeekModifierKey, setMouseWheelKeyframeSeekModifierKey, segmentMouseModifierKey, setSegmentMouseModifierKey, captureFrameMethod, setCaptureFrameMethod, captureFrameQuality, setCaptureFrameQuality, captureFrameFileNameFormat, setCaptureFrameFileNameFormat, enableNativeHevc, setEnableNativeHevc, enableUpdateCheck, setEnableUpdateCheck, allowMultipleInstances, setAllowMultipleInstances, preferStrongColors, setPreferStrongColors, treatInputFileModifiedTimeAsStart, setTreatInputFileModifiedTimeAsStart, treatOutputFileModifiedTimeAsStart, setTreatOutputFileModifiedTimeAsStart, storeWindowBounds, setStoreWindowBounds, reducedMotion, setReducedMotion, ffmpegHwaccel, setFfmpegHwaccel } = useUserSettings();
 
   const onLangChange = useCallback<ChangeEventHandler<HTMLSelectElement>>((e) => {
     const { value } = e.target;
@@ -139,18 +138,6 @@ function Settings({
           </KeyCell>
           <td>
             <Switch checked={showAdvancedSettings} onCheckedChange={setShowAdvancedSettings} />
-          </td>
-        </Row>
-
-        <Row>
-          <KeyCell>
-            {t('Show export options screen before exporting?')}
-            <div style={detailsStyle}>
-              {t('This gives you an overview of the export and allows you to customise more parameters before exporting, like changing the output file name.')}
-            </div>
-          </KeyCell>
-          <td>
-            <Switch checked={exportConfirmEnabled} onCheckedChange={toggleExportConfirmEnabled} />
           </td>
         </Row>
 
@@ -219,24 +206,6 @@ function Settings({
 
 
         <Header title={t('Options affecting exported files')} />
-
-        <Row>
-          <KeyCell>
-            {t('Choose cutting mode: Remove or keep selected segments from video when exporting?')}<br />
-            <div style={detailsStyle}>
-              {invertCutSegments ? (
-                <><b>{t('Remove')}</b>: {t('The video inside segments will be discarded, while the video surrounding them will be kept.')}</>
-              ) : (
-                <><b>{t('Keep')}</b>: {t('The video inside segments will be kept, while the video outside will be discarded.')}</>
-              )}
-            </div>
-          </KeyCell>
-          <td>
-            <Button onClick={() => setInvertCutSegments((v) => !v)}>
-              <FaYinYang style={{ verticalAlign: 'middle', marginRight: '.3em', color: invertCutSegments ? dangerColor : undefined }} /> {invertCutSegments ? t('Remove') : t('Keep')}
-            </Button>
-          </td>
-        </Row>
 
         <Row>
           <KeyCell>

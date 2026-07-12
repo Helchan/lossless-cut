@@ -81,11 +81,6 @@ export interface SegmentToExport extends DefiniteSegmentBase {
   tags?: SegmentTags | undefined;
 }
 
-export interface InverseCutSegment extends DefiniteSegmentBase {
-  segId: string;
-}
-
-
 export type PlaybackMode = 'loop-segment-start-end' | 'loop-segment' | 'play-segment-once' | 'play-selected-segments' | 'loop-selected-segments';
 
 export type EdlFileType = 'llc' | 'csv' | 'csv-frames' | 'cutlist' | 'xmeml' | 'fcpxml' | 'dv-analyzer-summary-txt' | 'cue' | 'pbf' | 'edl' | 'srt' | 'otio';
@@ -145,7 +140,7 @@ export type CopyfileStreams = {
 
 export interface Chapter { start: number, end: number, name?: string | undefined }
 
-export type LiteFFprobeStream = Pick<FFprobeStream, 'index' | 'codec_type' | 'codec_tag' | 'codec_name' | 'disposition' | 'tags' | 'sample_rate' | 'time_base'>;
+export type LiteFFprobeStream = Pick<FFprobeStream, 'index' | 'codec_type' | 'codec_tag' | 'codec_name' | 'disposition' | 'tags' | 'sample_rate' | 'time_base'> & Partial<Pick<FFprobeStream, 'start_time' | 'duration' | 'pix_fmt' | 'width' | 'height' | 'channels' | 'channel_layout' | 'sample_fmt' | 'bits_per_sample' | 'bits_per_raw_sample' | 'avg_frame_rate' | 'r_frame_rate' | 'bit_rate' | 'profile' | 'level' | 'has_b_frames' | 'sample_aspect_ratio' | 'color_range' | 'color_space' | 'color_transfer' | 'color_primaries' | 'chroma_location'>>;
 
 export interface FileStats {
   size: number | bigint,

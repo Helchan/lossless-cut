@@ -21,12 +21,10 @@ See also https://github.com/mifi/lossless-cut/issues/2515
 
 interface KeyEventParams { e: KeyboardEvent, action: KeyboardAction | undefined }
 
-export default ({ keyBindings, keyUpActions, getKeyboardAction, closeExportConfirm, exportConfirmOpen }: {
+export default ({ keyBindings, keyUpActions, getKeyboardAction }: {
   keyBindings: KeyBinding[],
   keyUpActions: Record<string, () => void>,
   getKeyboardAction: (action: KeyboardAction) => (() => boolean) | (() => void),
-  exportConfirmOpen: boolean,
-  closeExportConfirm: () => void,
 }) => {
   const [keyboardLayoutMap, setKeyboardLayoutMap] = useState<KeyboardLayoutMap | undefined>();
 
@@ -38,21 +36,6 @@ export default ({ keyBindings, keyUpActions, getKeyboardAction, closeExportConfi
   }, [keyUpActions]);
 
   const onKeyDown2 = useCallback(({ e, action }: KeyEventParams) => {
-    // Allow escape to close dialogs, no matter what's focused
-    // todo remove once we use Dialog component (already supports escape button)
-    const isEscape = e.code === 'Escape';
-    if (exportConfirmOpen) {
-      if (isEscape) {
-        closeExportConfirm();
-        e.preventDefault();
-        e.stopPropagation();
-        return;
-      }
-      if (action !== 'export') {
-        return; // stop here, don't allow other key actions than export while dialog is open
-      }
-    }
-
     // From now on, only handle key events when focus is on document body
     // because we don't allow focus to anything else
     // except for inputs, buttons, dialogs etc, which we want allowed to handle keys normally.
@@ -84,7 +67,7 @@ export default ({ keyBindings, keyUpActions, getKeyboardAction, closeExportConfi
     }
 
     if (isDev) console.log('key event', e.code, action, { defaultPrevented: e.defaultPrevented });
-  }, [closeExportConfirm, exportConfirmOpen, getKeyboardAction]);
+  }, [getKeyboardAction]);
 
 
   // optimization to prevent re-binding all the time:

@@ -1,6 +1,6 @@
 import type { SetStateAction, Dispatch, MouseEventHandler, CSSProperties } from 'react';
 import { memo, useMemo, useRef, useCallback, useState, useEffect } from 'react';
-import { FaYinYang, FaSave, FaPlus, FaMinus, FaTag, FaSortNumericDown, FaRegCheckCircle, FaRegCircle, FaTimes } from 'react-icons/fa';
+import { FaSave, FaPlus, FaMinus, FaTag, FaSortNumericDown, FaRegCheckCircle, FaRegCircle, FaTimes } from 'react-icons/fa';
 import { AiOutlineSplitCells } from 'react-icons/ai';
 import { motion } from 'motion/react';
 import { useTranslation, Trans } from 'react-i18next';
@@ -16,11 +16,11 @@ import prettyBytes from 'pretty-bytes';
 import useContextMenu from './hooks/useContextMenu';
 import useUserSettings from './hooks/useUserSettings';
 import useActionTitle from './hooks/useActionTitle';
-import { saveColor, controlsBackground, primaryTextColor, darkModeTransition } from './colors';
+import { controlsBackground, primaryTextColor, darkModeTransition } from './colors';
 import { useSegColors } from './contexts';
 import { getSegmentTags } from './segments';
 import TagEditor from './components/TagEditor';
-import type { ContextMenuTemplate, DefiniteSegmentBase, FormatTimecode, GetFrameCount, InverseCutSegment, SegmentBase, SegmentColorIndex, SegmentTags, StateSegment } from './types';
+import type { ContextMenuTemplate, DefiniteSegmentBase, FormatTimecode, GetFrameCount, SegmentBase, SegmentColorIndex, SegmentTags, StateSegment } from './types';
 import type { UseSegments } from './hooks/useSegments';
 import * as Dialog from './components/Dialog';
 import { DialogButton } from './components/Button';
@@ -68,7 +68,7 @@ const Segment = memo(({
   onDuplicateSegmentClick,
   getSegEstimatedSize,
 }: {
-  seg: StateSegment | InverseCutSegment,
+  seg: StateSegment,
   index: number,
   isActive?: boolean | undefined,
   dragging?: boolean | undefined,
@@ -100,15 +100,13 @@ const Segment = memo(({
   onDuplicateSegmentClick: UseSegments['duplicateSegment'],
   getSegEstimatedSize: UseSegments['getSegEstimatedSize'],
 }) => {
-  const { invertCutSegments, darkMode } = useUserSettings();
+  const { darkMode } = useUserSettings();
   const { t } = useTranslation();
   const { getSegColor } = useSegColors();
 
   const ref = useRef<HTMLDivElement | null>(null);
 
   const contextMenuTemplate = useMemo<ContextMenuTemplate>(() => {
-    if (invertCutSegments) return [];
-
     const updateOrder = (dir: number) => updateSegOrder(index, index + dir);
 
     return [
@@ -150,7 +148,7 @@ const Segment = memo(({
       { label: t('Segment tags'), click: () => onEditSegmentTags(index) },
       { label: t('Extract segment frames as image files'), click: () => onExtractSegmentsFramesAsImages([seg]) },
     ];
-  }, [invertCutSegments, t, addSegment, onLabelSelectedSegments, onRemoveSelected, onExtractSelectedSegmentsFramesAsImages, updateSegOrder, index, jumpSegStart, jumpSegEnd, onLabelPress, onRemovePress, onDuplicateSegmentClick, seg, onSelectSingleSegment, onSelectAllSegments, onDeselectAllSegments, onSelectAllMarkers, onSelectSegmentsByLabel, onSelectSegmentsByExpr, onInvertSelectedSegments, onMutateSegmentsByExpr, onReorderPress, onEditSegmentTags, onExtractSegmentsFramesAsImages]);
+  }, [t, addSegment, onLabelSelectedSegments, onRemoveSelected, onExtractSelectedSegmentsFramesAsImages, updateSegOrder, index, jumpSegStart, jumpSegEnd, onLabelPress, onRemovePress, onDuplicateSegmentClick, seg, onSelectSingleSegment, onSelectAllSegments, onDeselectAllSegments, onSelectAllMarkers, onSelectSegmentsByLabel, onSelectSegmentsByExpr, onInvertSelectedSegments, onMutateSegmentsByExpr, onReorderPress, onEditSegmentTags, onExtractSegmentsFramesAsImages]);
 
   useContextMenu(ref, contextMenuTemplate);
 
@@ -164,10 +162,6 @@ const Segment = memo(({
   ), [formatTimecode, seg]);
 
   function renderNumber() {
-    if (invertCutSegments || !('segColorIndex' in seg)) {
-      return <FaSave style={{ color: saveColor, marginRight: '.2em', verticalAlign: 'middle' }} size={14} />;
-    }
-
     const segColor = getSegColor(seg);
 
     const color = segColor.desaturate(0.25).lightness(darkMode ? 35 : 55);
@@ -180,10 +174,7 @@ const Segment = memo(({
     );
   }
 
-  const onDoubleClick = useCallback(() => {
-    if (invertCutSegments) return;
-    jumpSegStart(index);
-  }, [index, invertCutSegments, jumpSegStart]);
+  const onDoubleClick = useCallback(() => jumpSegStart(index), [index, jumpSegStart]);
 
   const CheckIcon = selected ? FaRegCheckCircle : FaRegCircle;
 
@@ -192,14 +183,14 @@ const Segment = memo(({
     onToggleSegmentSelected(seg);
   }, [onToggleSegmentSelected, seg]);
 
-  const cursor = invertCutSegments ? undefined : (dragging ? 'grabbing' : 'grab');
+  const cursor = dragging ? 'grabbing' : 'grab';
 
-  const tags = useMemo(() => getSegmentTags('tags' in seg ? seg : {}), [seg]);
+  const tags = useMemo(() => getSegmentTags(seg), [seg]);
 
   const handleSegmentClick = useCallback<MouseEventHandler<HTMLDivElement>>((e) => {
     e.currentTarget.blur();
-    if (!invertCutSegments) onClick(index);
-  }, [index, invertCutSegments, onClick]);
+    onClick(index);
+  }, [index, onClick]);
 
   const handleDraggableClick = useCallback<MouseEventHandler<HTMLDivElement>>((e) => {
     e.currentTarget.blur();
@@ -211,7 +202,6 @@ const Segment = memo(({
       duration: 150,
       easing: 'ease-in-out',
     },
-    disabled: invertCutSegments,
   });
 
   const style = useMemo<CSSProperties>(() => {
@@ -231,9 +221,9 @@ const Segment = memo(({
       background: 'var(--gray-1)',
       border: `1px solid ${isActive ? 'var(--gray-10)' : 'transparent'}`,
       borderRadius: 5,
-      opacity: !selected && !invertCutSegments ? 0.5 : undefined,
+      opacity: !selected ? 0.5 : undefined,
     };
-  }, [invertCutSegments, isActive, selected, sortable.isDragging, sortable.transform, sortable.transition]);
+  }, [isActive, selected, sortable.isDragging, sortable.transform, sortable.transition]);
 
   const setRef = useCallback((node: HTMLDivElement | null) => {
     sortable.setNodeRef(node);
@@ -263,7 +253,7 @@ const Segment = memo(({
         <span style={{ cursor, fontSize: `${Math.min(1, 26 / timeStr.length) * 0.75}em`, whiteSpace: 'nowrap' }}>{timeStr}</span>
       </div>
 
-      {'name' in seg && seg.name && <span style={{ fontSize: '.75em', color: primaryTextColor, marginRight: '.3em' }}>{seg.name}</span>}
+      {seg.name && <span style={{ fontSize: '.75em', color: primaryTextColor, marginRight: '.3em' }}>{seg.name}</span>}
       {Object.entries(tags).map(([name, value]) => (
         <span style={{ fontSize: '.7em', backgroundColor: 'var(--gray-5)', color: 'var(--gray-12)', borderRadius: '.4em', padding: '0 .2em', marginRight: '.1em' }} key={name}>{name}:<b>{value}</b></span>
       ))}
@@ -286,7 +276,7 @@ const Segment = memo(({
         </>
       )}
 
-      {!invertCutSegments && selected != null && (
+      {selected != null && (
         <div style={{ position: 'absolute', right: 3, bottom: 3 }}>
           <CheckIcon className="selected" size={20} color="var(--gray-12)" onClick={onToggleSegmentSelectedClick} />
         </div>
@@ -299,7 +289,6 @@ function SegmentList({
   width,
   formatTimecode,
   cutSegments,
-  inverseCutSegments,
   getFrameCount,
   onSegClick,
   currentSegIndex,
@@ -340,7 +329,6 @@ function SegmentList({
   width: number,
   formatTimecode: FormatTimecode,
   cutSegments: StateSegment[],
-  inverseCutSegments: InverseCutSegment[],
   getFrameCount: GetFrameCount,
   onSegClick: (index: number) => void,
   currentSegIndex: number,
@@ -382,7 +370,7 @@ function SegmentList({
   const { getSegColor, nextSegColorIndex } = useSegColors();
   const [draggingId, setDraggingId] = useState<UniqueIdentifier | undefined>();
 
-  const { invertCutSegments, simpleMode, darkMode, springAnimation } = useUserSettings();
+  const { darkMode, springAnimation } = useUserSettings();
   const actionTitle = useActionTitle();
 
   const getButtonColor = useCallback((seg: SegmentColorIndex | undefined, next?: boolean) => getSegColor(seg ? { segColorIndex: next ? seg.segColorIndex + 1 : seg.segColorIndex } : undefined).desaturate(0.3).lightness(darkMode ? 45 : 55).string(), [darkMode, getSegColor]);
@@ -392,21 +380,12 @@ function SegmentList({
 
   const segmentsTotal = useMemo(() => selectedSegments.reduce((acc, seg) => (seg.end == null ? 0 : seg.end - seg.start) + acc, 0), [selectedSegments]);
 
-  const segmentsOrInverse: (InverseCutSegment | StateSegment)[] = invertCutSegments ? inverseCutSegments : cutSegments;
+  const sortableList = useMemo(() => cutSegments.map((seg) => ({ id: seg.segId, seg })), [cutSegments]);
 
-  const sortableList = useMemo(() => segmentsOrInverse.map((seg) => ({ id: seg.segId, seg })), [segmentsOrInverse]);
-
-  const isOnlyMarkers = useMemo(() => segmentsOrInverse.length > 0 && segmentsOrInverse.every((seg) => seg.end == null), [segmentsOrInverse]);
+  const isOnlyMarkers = useMemo(() => cutSegments.length > 0 && cutSegments.every((seg) => seg.end == null), [cutSegments]);
 
   function getHeader() {
-    if (segmentsOrInverse.length === 0) {
-      if (invertCutSegments) {
-        return (
-          <Trans>You have enabled the &quot;invert segments&quot; mode <FaYinYang style={{ verticalAlign: 'middle' }} /> which will cut away selected segments instead of keeping them. But there is no space between any segments, or at least two segments are overlapping. This would not produce any output. Either make room between segments or click the Yinyang <FaYinYang style={{ verticalAlign: 'middle' }} /> symbol below to disable this mode. Alternatively you may combine overlapping segments from the menu.</Trans>
-        );
-      }
-      return t('No segments to export.');
-    }
+    if (cutSegments.length === 0) return t('No segments to export.');
 
     if (isOnlyMarkers) {
       return t('Markers:');
@@ -454,25 +433,21 @@ function SegmentList({
             onClick={() => removeSegment(currentSegIndex)}
           />
 
-          {!invertCutSegments && !simpleMode && (
-            <>
-              <FaSortNumericDown
-                size={16}
-                title={actionTitle(t('Change segment order'), 'reorderSegsByStartTime')}
-                role="button"
-                style={{ ...buttonBaseStyle, padding: 4, ...(cutSegments.length >= 2 ? { backgroundColor: currentSegColor } : disabledButtonStyle) }}
-                onClick={() => onReorderSegs(currentSegIndex)}
-              />
+          <FaSortNumericDown
+            size={16}
+            title={actionTitle(t('Change segment order'), 'reorderSegsByStartTime')}
+            role="button"
+            style={{ ...buttonBaseStyle, padding: 4, ...(cutSegments.length >= 2 ? { backgroundColor: currentSegColor } : disabledButtonStyle) }}
+            onClick={() => onReorderSegs(currentSegIndex)}
+          />
 
-              <FaTag
-                size={16}
-                title={actionTitle(t('Label segment'), 'labelCurrentSegment')}
-                role="button"
-                style={{ ...buttonBaseStyle, padding: 4, ...(cutSegments.length > 0 ? { backgroundColor: currentSegColor } : disabledButtonStyle) }}
-                onClick={() => onLabelSegment(currentSegIndex)}
-              />
-            </>
-          )}
+          <FaTag
+            size={16}
+            title={actionTitle(t('Label segment'), 'labelCurrentSegment')}
+            role="button"
+            style={{ ...buttonBaseStyle, padding: 4, ...(cutSegments.length > 0 ? { backgroundColor: currentSegColor } : disabledButtonStyle) }}
+            onClick={() => onLabelSegment(currentSegIndex)}
+          />
 
           <AiOutlineSplitCells
             size={22}
@@ -482,15 +457,13 @@ function SegmentList({
             onClick={() => splitCurrentSegment()}
           />
 
-          {!invertCutSegments && (
-            <FaRegCheckCircle
-              size={22}
-              title={actionTitle(t('Invert segment selection'), 'invertSelectedSegments')}
-              role="button"
-              style={{ ...buttonBaseStyle, padding: 1, ...(cutSegments.length > 0 ? { backgroundColor: neutralButtonColor } : disabledButtonStyle) }}
-              onClick={onInvertSelectedSegments}
-            />
-          )}
+          <FaRegCheckCircle
+            size={22}
+            title={actionTitle(t('Invert segment selection'), 'invertSelectedSegments')}
+            role="button"
+            style={{ ...buttonBaseStyle, padding: 1, ...(cutSegments.length > 0 ? { backgroundColor: neutralButtonColor } : disabledButtonStyle) }}
+            onClick={onInvertSelectedSegments}
+          />
         </div>
 
         <div style={{ padding: '5px 10px', boxSizing: 'border-box', borderBottom: '1px solid var(--gray-6)', borderTop: '1px solid var(--gray-6)', display: 'flex', justifyContent: 'space-between', fontSize: '.8em' }}>
@@ -546,9 +519,8 @@ function SegmentList({
   });
 
   useEffect(() => {
-    if (invertCutSegments) return;
     rowVirtualizer.scrollToIndex(currentSegIndex, { behavior: 'smooth', align: 'auto' });
-  }, [currentSegIndex, invertCutSegments, rowVirtualizer]);
+  }, [currentSegIndex, rowVirtualizer]);
 
   const handleDragStart = (event: DragStartEvent) => {
     setDraggingId(event.active.id);
@@ -569,7 +541,7 @@ function SegmentList({
   const draggingSeg = useMemo(() => sortableList.find((s) => s.id === draggingId), [sortableList, draggingId]);
 
   function renderSegment({ seg, index, selected, isActive, dragging }: {
-    seg: StateSegment | InverseCutSegment,
+    seg: StateSegment,
     index: number,
     selected?: boolean,
     isActive?: boolean,
@@ -658,8 +630,8 @@ function SegmentList({
               <div style={{ height: rowVirtualizer.getTotalSize(), position: 'relative', overflow: 'hidden' }}>
                 {rowVirtualizer.getVirtualItems().map((virtualRow) => {
                   const { id, seg } = sortableList[virtualRow.index]!;
-                  const selected = 'selected' in seg ? seg.selected : true;
-                  const isActive = !invertCutSegments && currentSegIndex === virtualRow.index;
+                  const { selected } = seg;
+                  const isActive = currentSegIndex === virtualRow.index;
 
                   return (
                     <div

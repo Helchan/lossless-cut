@@ -2,7 +2,7 @@ import type { CSSProperties, Dispatch, SetStateAction } from 'react';
 import { memo, useState, useCallback, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AiOutlineMergeCells } from 'react-icons/ai';
-import { FaQuestionCircle, FaExclamationTriangle, FaCog, FaCheck, FaInfoCircle } from 'react-icons/fa';
+import { FaQuestionCircle, FaExclamationTriangle, FaCog, FaCheck } from 'react-icons/fa';
 import invariant from 'tiny-invariant';
 import pMap from 'p-map';
 import { Table } from '@radix-ui/themes';
@@ -18,7 +18,7 @@ import type { FFprobeStream } from '../../../common/ffprobe';
 import Button, { DialogButton } from './Button';
 import type { GeneratedOutFileNames, GenerateMergedOutFileNames } from '../util/outputNameTemplate';
 import { defaultMergedFileTemplate } from '../util/outputNameTemplate';
-import { dangerColor, primaryTextColor, saveColor, warningColor } from '../colors';
+import { dangerColor, saveColor, warningColor } from '../colors';
 import * as Dialog from './Dialog';
 import FileNameTemplateEditor from './FileNameTemplateEditor';
 import HighlightedText from './HighlightedText';
@@ -51,7 +51,7 @@ type Problem = {
   values: [ProblemValue, ProblemValue],
 });
 
-function ConcatDialog({ isShown, onHide, paths, mergedFileTemplate: storedMergedFileTemplate, generateMergedFileNames, onConcat, alwaysConcatMultipleFiles, setAlwaysConcatMultipleFiles, fileFormat, setFileFormat, detectedFileFormat, setDetectedFileFormat, onOutputFormatUserChange }: {
+function ConcatDialog({ isShown, onHide, paths, mergedFileTemplate, generateMergedFileNames, onConcat, alwaysConcatMultipleFiles, setAlwaysConcatMultipleFiles, fileFormat, setFileFormat, detectedFileFormat, setDetectedFileFormat, onOutputFormatUserChange }: {
   isShown: boolean,
   onHide: () => void,
   paths: string[],
@@ -67,14 +67,14 @@ function ConcatDialog({ isShown, onHide, paths, mergedFileTemplate: storedMerged
   onOutputFormatUserChange: (newFormat: string) => void,
 }) {
   const { t } = useTranslation();
-  const { preserveMovData, setPreserveMovData, segmentsToChapters, setSegmentsToChapters, preserveMetadataOnMerge, setPreserveMetadataOnMerge, customOutDir, simpleMode, setMergedFileTemplate: setStoredMergedFileTemplate, outFormatLocked } = useUserSettings();
+  const { preserveMovData, setPreserveMovData, segmentsToChapters, setSegmentsToChapters, preserveMetadataOnMerge, setPreserveMetadataOnMerge, customOutDir, setMergedFileTemplate, outFormatLocked } = useUserSettings();
 
   // Note: all state here is preserved when dialog is closed
 
   const [includeAllStreams, setIncludeAllStreams] = useState(false);
   const [allFilesMeta, setAllFilesMeta] = useState<Record<string, { ffprobeMeta: FileFfprobeMeta, stats: FileStats }>>({});
   const [clearBatchFilesAfterConcat, setClearBatchFilesAfterConcat] = useState(false);
-  const [enableReadFileMeta, setEnableReadFileMeta] = useState(simpleMode);
+  const [enableReadFileMeta, setEnableReadFileMeta] = useState(false);
   const [uniqueSuffix, setUniqueSuffix] = useState(() => Date.now());
 
   const firstPath = useMemo(() => paths[0], [paths]);
@@ -92,42 +92,13 @@ function ConcatDialog({ isShown, onHide, paths, mergedFileTemplate: storedMerged
     return generateMergedFileNames({ template, sourceFiles, fileFormat, outputDir, epochMs: uniqueSuffix });
   }, [allFilesMeta, fileFormat, generateMergedFileNames, outputDir, paths, uniqueSuffix]);
 
-  // for simple mode, we want to auto-generate the merged file template based on the first file, so we don't store it in user settings, as that could overwrite what they already have there
-  // https://github.com/mifi/lossless-cut/issues/2927#issuecomment-4773155758
-  const [tempMergedFileTemplate, setTempMergedFileTemplate] = useState<string | undefined>(defaultMergedFileTemplate);
-  const mergedFileTemplate = simpleMode ? (tempMergedFileTemplate ?? defaultMergedFileTemplate) : storedMergedFileTemplate;
-  const setMergedFileTemplate = simpleMode ? setTempMergedFileTemplate : setStoredMergedFileTemplate;
-
   useEffect(() => {
     if (!isShown) {
       // todo
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setAllFilesMeta({});
-      setTempMergedFileTemplate(defaultMergedFileTemplate);
     }
   }, [isShown, setDetectedFileFormat, setFileFormat]);
-
-  useEffect(() => {
-    if (simpleMode) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setEnableReadFileMeta(true);
-    }
-  }, [simpleMode]);
-
-  useEffect(() => {
-    const abortController = new AbortController();
-
-    (async () => {
-      // in simple mode, set merged file template to a generated name based on first file, so they don't *have to* deal with variables
-      if (isShown && simpleMode && firstPath != null && fileFormat != null) {
-        const generated = await generateFileNames(defaultMergedFileTemplate);
-        if (abortController.signal.aborted) return;
-        setMergedFileTemplate(generated.fileNames[0]);
-      }
-    })().catch(console.error);
-
-    return () => abortController.abort();
-  }, [fileFormat, firstPath, generateFileNames, isShown, setMergedFileTemplate, simpleMode]);
 
   const matchingFilesMeta = useMemo(() => {
     if (paths.length === 0) return undefined;
@@ -348,18 +319,10 @@ function ConcatDialog({ isShown, onHide, paths, mergedFileTemplate: storedMerged
               <Alert text={t('File compatibility check is not enabled, so the merge operation might not produce a valid output. Enable "Check compatibility" below to check file compatibility before merging.')} />
             )}
 
-            {simpleMode && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0 .5em', color: primaryTextColor }}>
-                <FaInfoCircle color={primaryTextColor} style={{ verticalAlign: 'middle' }} />
-                {t('You are in simple mode, meaning some functionality has been simplified or hidden.')}
-              </div>
-            )}
           </div>
 
           <Dialog.ButtonRow>
-            {!simpleMode && (
-              <Checkbox checked={enableReadFileMeta} onCheckedChange={handleReadFileMetaCheckedChange} label={t('Check compatibility')} />
-            )}
+            <Checkbox checked={enableReadFileMeta} onCheckedChange={handleReadFileMetaCheckedChange} label={t('Check compatibility')} />
 
             <Dialog.Close asChild>
               <DialogButton>{t('Cancel')}</DialogButton>
@@ -386,8 +349,6 @@ function ConcatDialog({ isShown, onHide, paths, mergedFileTemplate: storedMerged
                   <Checkbox checked={alwaysConcatMultipleFiles} onCheckedChange={(checked) => setAlwaysConcatMultipleFiles(checked === true)} label={t('Always open this dialog when opening multiple files')} />
 
                   <Checkbox checked={clearBatchFilesAfterConcat} onCheckedChange={(checked) => setClearBatchFilesAfterConcat(checked === true)} label={t('Clear batch file list after merge')} />
-
-                  <p>{t('Note that also other settings from the normal export dialog apply to this merge function. For more information about all options, see the export dialog.')}</p>
 
                   <Dialog.ButtonRow>
                     <Dialog.Close asChild>

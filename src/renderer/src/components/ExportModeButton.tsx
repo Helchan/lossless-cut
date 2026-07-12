@@ -1,35 +1,23 @@
 import type { CSSProperties } from 'react';
-import { memo, useMemo } from 'react';
+import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { withBlur } from '../util';
 import useUserSettings from '../hooks/useUserSettings';
 import Select from './Select';
-import type { ExportMode } from '../types';
+import type { SegmentExportIntent } from '../segmentExportPlan';
 
 
-function ExportModeButton({ selectedSegments, style }: { selectedSegments: unknown[], style?: CSSProperties }) {
+function ExportModeButton({ style }: { selectedSegments: unknown[], style?: CSSProperties }) {
   const { t } = useTranslation();
 
   const { effectiveExportMode, setAutoMerge, setAutoDeleteMergedSegments, setSegmentsToChaptersOnly } = useUserSettings();
 
-  function onChange(newMode: ExportMode) {
+  function onChange(newMode: SegmentExportIntent) {
     switch (newMode) {
-      case 'segments_to_chapters': {
-        setAutoMerge(false);
-        setAutoDeleteMergedSegments(false);
-        setSegmentsToChaptersOnly(true);
-        break;
-      }
       case 'merge': {
         setAutoMerge(true);
         setAutoDeleteMergedSegments(true);
-        setSegmentsToChaptersOnly(false);
-        break;
-      }
-      case 'merge+separate': {
-        setAutoMerge(true);
-        setAutoDeleteMergedSegments(false);
         setSegmentsToChaptersOnly(false);
         break;
       }
@@ -43,27 +31,20 @@ function ExportModeButton({ selectedSegments, style }: { selectedSegments: unkno
     }
   }
 
-  const selectableModes = useMemo(() => [
-    'separate' as const,
-    ...(selectedSegments.length >= 2 || effectiveExportMode === 'merge' ? ['merge'] as const : []),
-    ...(selectedSegments.length >= 2 || effectiveExportMode === 'merge+separate' ? ['merge+separate'] as const : []),
-    'segments_to_chapters' as const,
-  ], [effectiveExportMode, selectedSegments.length]);
+  const selectedMode: SegmentExportIntent = effectiveExportMode === 'merge' || effectiveExportMode === 'merge+separate' ? 'merge' : 'separate';
 
   return (
     // eslint-disable-next-line react/jsx-props-no-spreading
     <Select
       style={style}
-      value={effectiveExportMode}
-      onChange={withBlur((e) => onChange(e.target.value as ExportMode))}
+      value={selectedMode}
+      onChange={withBlur((e) => onChange(e.target.value as SegmentExportIntent))}
     >
       <option key="disabled" value="" disabled>{t('Export mode')}</option>
 
-      {selectableModes.map((mode) => {
+      {(['separate', 'merge'] as const).map((mode) => {
         const titles = {
-          segments_to_chapters: t('Segments to chapters'),
-          merge: t('Merge cuts'),
-          'merge+separate': t('Merge & Separate'),
+          merge: t('Export+merge'),
           separate: t('Separate files'),
         };
 

@@ -3,7 +3,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import type { ChromiumHTMLVideoElement, PlaybackMode } from '../types';
 import { showPlaybackFailedMessage } from '../swal';
 
-export default ({ filePath }: { filePath: string | undefined }) => {
+export default ({ filePath, sourceDuration }: { filePath: string | undefined, sourceDuration: number | undefined }) => {
   const [commandedTime, setCommandedTimeRaw] = useState(0);
   const [playbackRate, setPlaybackRateState] = useState(1);
   const [outputPlaybackRate, setOutputPlaybackRateState] = useState(1);
@@ -18,6 +18,12 @@ export default ({ filePath }: { filePath: string | undefined }) => {
 
   const videoRef = useRef<ChromiumHTMLVideoElement>(null);
   const videoContainerRef = useRef<HTMLDivElement>(null);
+
+  // HTML media time and ffmpeg/ffprobe time are both expressed in seconds.
+  // A duration mismatch is normally padding or container metadata, not a
+  // request to retime every point in the file. Keep interior timestamps 1:1.
+  const playerTimeToSourceTime = useCallback((time: number) => time, []);
+  const sourceTimeToPlayerTime = useCallback((time: number) => time, []);
 
   const setPlaybackRate = useCallback((rate: number) => {
     if (videoRef.current) videoRef.current.playbackRate = rate;
@@ -71,16 +77,17 @@ export default ({ filePath }: { filePath: string | undefined }) => {
     if (video == null || val == null || Number.isNaN(val)) return;
     let outVal = val;
     if (outVal < 0) outVal = 0;
-    if (outVal > video.duration) outVal = video.duration;
+    const maxSourceTime = sourceDuration != null && Number.isFinite(sourceDuration) && sourceDuration > 0 ? sourceDuration : video.duration;
+    if (outVal > maxSourceTime) outVal = maxSourceTime;
 
-    smoothSeek(outVal);
+    smoothSeek(sourceTimeToPlayerTime(outVal));
     setCommandedTime(outVal);
-  }, [filePath, setCommandedTime, smoothSeek]);
+  }, [filePath, setCommandedTime, smoothSeek, sourceDuration, sourceTimeToPlayerTime]);
 
   // Relevant time is the player's playback position if we're currently playing - if not, it's the user's commanded time.
   const relevantTime = useMemo(() => (playing ? playerTime : commandedTime) || 0, [commandedTime, playerTime, playing]);
   // The reason why we also have a getter is because it can be used when we need to get the time, but don't want to re-render for every time update (which can be heavy!)
-  const getRelevantTime = useCallback(() => (playingRef.current ? videoRef.current!.currentTime : commandedTimeRef.current) || 0, []);
+  const getRelevantTime = useCallback(() => (playingRef.current ? playerTimeToSourceTime(videoRef.current!.currentTime) : commandedTimeRef.current) || 0, [playerTimeToSourceTime]);
 
   const seekRel = useCallback((val: number) => {
     seekAbs(getRelevantTime() + val);
@@ -90,9 +97,9 @@ export default ({ filePath }: { filePath: string | undefined }) => {
     playingRef.current = val;
     setPlaying(val);
     if (!val && videoRef.current) {
-      setCommandedTime(videoRef.current.currentTime);
+      setCommandedTime(playerTimeToSourceTime(videoRef.current.currentTime));
     }
-  }, [setCommandedTime]);
+  }, [playerTimeToSourceTime, setCommandedTime]);
 
   const onStopPlaying = useCallback(() => {
     onPlayingChange(false);
@@ -158,5 +165,6 @@ export default ({ filePath }: { filePath: string | undefined }) => {
     playbackModeRef,
     playerTime,
     setPlayerTime,
+    playerTimeToSourceTime,
   };
 };

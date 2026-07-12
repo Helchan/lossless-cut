@@ -28,7 +28,7 @@ const ExportButton = forwardRef<HTMLButtonElement, Props>(({
 
   const { t } = useTranslation();
 
-  const { autoMerge, simpleMode } = useUserSettings();
+  const { autoMerge } = useUserSettings();
 
   let title = t('Export');
   if (segmentsToExport.length === 1) {
@@ -37,13 +37,13 @@ const ExportButton = forwardRef<HTMLButtonElement, Props>(({
     title = t('Export {{ num }} segments', { num: segmentsToExport.length });
   }
 
-  const text = autoMerge && segmentsToExport && segmentsToExport.length > 1 ? t('Export+merge') : t('Export');
+  const text = autoMerge && segmentsToExport.length > 0 ? t('Export+merge') : t('Export');
 
   return (
     <button
       ref={ref}
       type="button"
-      className={[...(simpleMode ? ['export-animation'] : []), styles['exportButton']].join(' ')}
+      className={styles['exportButton']}
       style={{ backgroundColor: primaryColor, ...style }}
       onClick={onClick}
       title={title}

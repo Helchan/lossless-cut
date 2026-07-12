@@ -18,6 +18,11 @@ function Working({ text, progress, onAbortClick }: {
 
   const [startedAt] = useState(() => new Date());
   const [elapsedMs, setElapsedMs] = useState(0);
+  // While this overlay is mounted the operation is, by definition, still in
+  // progress. Reserve 100% for the successful transition that unmounts it.
+  const visibleProgress = progress == null || !Number.isFinite(progress)
+    ? undefined
+    : Math.min(Math.max(progress, 0), 0.999);
 
   // Reassure the user that the app is not frozen
   // This is because some ffmpeg operations can take a long time without giving any progress updates, which might make the user think that the app is frozen
@@ -52,9 +57,9 @@ function Working({ text, progress, onAbortClick }: {
           {t('Elapsed: {{seconds}} seconds', { seconds: (elapsedMs / 1000).toFixed(1) })}
         </div>
 
-        {(progress != null) && (
+        {(visibleProgress != null) && (
           <div style={{ marginBottom: '.5em', fontSize: '1.3em' }}>
-            {`${(progress * 100).toFixed(1)} %`}
+            {`${(visibleProgress * 100).toFixed(1)} %`}
           </div>
         )}
 

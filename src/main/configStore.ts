@@ -107,9 +107,7 @@ const defaults: Config = {
   segmentsToChaptersOnly: false,
   enableSmartCut: false,
   timecodeFormat: 'timecodeWithDecimalFraction',
-  invertCutSegments: false,
   autoExportExtraStreams: true,
-  exportConfirmEnabled: true,
   askBeforeClose: false,
   enableImportChapters: 'ask',
   enableAskForFileOpenAction: true,
@@ -129,7 +127,6 @@ const defaults: Config = {
   hideOsNotifications: undefined,
   autoLoadTimecode: false,
   segmentsToChapters: false,
-  simpleMode: true,
   outSegTemplate: undefined,
   mergedFileTemplate: undefined,
   mergedFilesTemplate: undefined,
@@ -248,6 +245,15 @@ export async function init({ customConfigDir }: { customConfigDir: string | unde
   if (customStoragePath) logger.info('customStoragePath', customStoragePath);
 
   await tryCreateStore({ customStoragePath });
+
+  // These modes were removed in 4.0.4. Purge persisted values so an old
+  // configuration cannot silently alter the explicit timeline export flow.
+  for (const obsoleteKey of ['invertCutSegments', 'simpleMode']) {
+    if (store.has(obsoleteKey)) {
+      logger.info(`Removing obsolete config key: ${obsoleteKey}`);
+      store.delete(obsoleteKey);
+    }
+  }
 
   // migrate old configs:
   const enableTransferTimestamps = store.get('enableTransferTimestamps'); // todo remove after a while

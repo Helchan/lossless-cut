@@ -77,8 +77,6 @@ export default function useUserSettingsRoot() {
   useEffect(() => safeSetConfig({ autoMerge }), [autoMerge]);
   const [timecodeFormat, setTimecodeFormat] = useState(safeGetConfigInitial('timecodeFormat'));
   useEffect(() => safeSetConfig({ timecodeFormat }), [timecodeFormat]);
-  const [invertCutSegments, setInvertCutSegments] = useState(safeGetConfigInitial('invertCutSegments'));
-  useEffect(() => safeSetConfig({ invertCutSegments }), [invertCutSegments]);
   const [autoExportExtraStreams, setAutoExportExtraStreams] = useState(safeGetConfigInitial('autoExportExtraStreams'));
   useEffect(() => safeSetConfig({ autoExportExtraStreams }), [autoExportExtraStreams]);
   const [askBeforeClose, setAskBeforeClose] = useState(safeGetConfigInitial('askBeforeClose'));
@@ -109,12 +107,8 @@ export default function useUserSettingsRoot() {
   useEffect(() => safeSetConfig({ autoLoadTimecode }), [autoLoadTimecode]);
   const [autoDeleteMergedSegments, setAutoDeleteMergedSegments] = useState(safeGetConfigInitial('autoDeleteMergedSegments'));
   useEffect(() => safeSetConfig({ autoDeleteMergedSegments }), [autoDeleteMergedSegments]);
-  const [exportConfirmEnabled, setExportConfirmEnabled] = useState(safeGetConfigInitial('exportConfirmEnabled'));
-  useEffect(() => safeSetConfig({ exportConfirmEnabled }), [exportConfirmEnabled]);
   const [segmentsToChapters, setSegmentsToChapters] = useState(safeGetConfigInitial('segmentsToChapters'));
   useEffect(() => safeSetConfig({ segmentsToChapters }), [segmentsToChapters]);
-  const [simpleMode, setSimpleMode] = useState(safeGetConfigInitial('simpleMode'));
-  useEffect(() => safeSetConfig({ simpleMode }), [simpleMode]);
   const [cutFileTemplate, setCutFileTemplate] = useState(safeGetConfigInitial('outSegTemplate'));
   useEffect(() => safeSetConfig({ outSegTemplate: cutFileTemplate }), [cutFileTemplate]);
   const [cutMergedFileTemplate, setCutMergedFileTemplate] = useState(safeGetConfigInitial('mergedFileTemplate'));
@@ -257,7 +251,6 @@ export default function useUserSettingsRoot() {
     avoidNegativeTs,
     autoMerge,
     timecodeFormat,
-    invertCutSegments,
     autoExportExtraStreams,
     askBeforeClose,
     enableImportChapters,
@@ -273,9 +266,7 @@ export default function useUserSettingsRoot() {
     hideOsNotifications,
     autoLoadTimecode,
     autoDeleteMergedSegments,
-    exportConfirmEnabled,
     segmentsToChapters,
-    simpleMode,
     cutFileTemplate,
     cutMergedFileTemplate,
     mergedFileTemplate,
@@ -338,7 +329,6 @@ export default function useUserSettingsRoot() {
     setAvoidNegativeTs,
     setAutoMerge,
     setTimecodeFormat,
-    setInvertCutSegments,
     setAutoExportExtraStreams,
     setAskBeforeClose,
     setEnableImportChapters,
@@ -354,9 +344,7 @@ export default function useUserSettingsRoot() {
     setHideOsNotifications,
     setAutoLoadTimecode,
     setAutoDeleteMergedSegments,
-    setExportConfirmEnabled,
     setSegmentsToChapters,
-    setSimpleMode,
     setCutFileTemplate,
     setCutMergedFileTemplate,
     setMergedFileTemplate,

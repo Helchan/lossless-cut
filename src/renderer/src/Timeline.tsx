@@ -9,20 +9,25 @@ import { MdRedo, MdUndo } from 'react-icons/md';
 import invariant from 'tiny-invariant';
 
 import TimelineSeg from './TimelineSeg';
-import BetweenSegments from './BetweenSegments';
 import useContextMenu from './hooks/useContextMenu';
-import useUserSettings from './hooks/useUserSettings';
 
 import styles from './Timeline.module.css';
 
 
 import { timelineBackground, darkModeTransition } from './colors';
 import type { Frame } from './ffmpeg';
-import type { ContextMenuTemplate, FormatTimecode, InverseCutSegment, OverviewWaveform, RenderableWaveform, SegmentToExport, WaveformSlice, StateSegment, Thumbnail } from './types';
+import type { ContextMenuTemplate, FormatTimecode, OverviewWaveform, RenderableWaveform, WaveformSlice, StateSegment, Thumbnail } from './types';
 import Button from './components/Button';
 import type { UseSegments } from './hooks/useSegments';
 import { calculateTimelinePercent as calculateTimelinePercent2, calculateTimelinePos } from './util';
 import { timelineBaseSecondsPerScreen, timelineMinContentWidth, zoomMax } from './util/constants';
+import {
+  buildTimelineProjection,
+  buildExplicitExportSegments,
+  displayTimeToSourceTime,
+  sourceTimeToDisplayTime,
+} from './timelineSegments';
+import type { SegmentExportIntent, SegmentExportSnapshot } from './segmentExportPlan';
 
 
 type CalculateTimelinePercent = (time: number) => string | undefined;
@@ -88,8 +93,6 @@ const TimelinePlayhead = memo(({ commandedTimePercent }: { commandedTimePercent:
 
 const timelineHeight = 36;
 const seekLaneHeight = 48;
-type TimelineExportMode = 'single' | 'merge' | 'separate';
-
 function Timeline({
   fileName,
   fileDurationNonZero,
@@ -103,7 +106,6 @@ function Timeline({
   cutSegments,
   setCurrentSegIndex,
   currentSegIndexSafe,
-  inverseCutSegments,
   formatTimecode,
   waveforms,
   overviewWaveform,
@@ -150,7 +152,6 @@ function Timeline({
   cutSegments: StateSegment[],
   setCurrentSegIndex: (a: number) => void,
   currentSegIndexSafe: number,
-  inverseCutSegments: InverseCutSegment[],
   formatTimecode: FormatTimecode,
   waveforms: WaveformSlice[],
   overviewWaveform: OverviewWaveform | undefined,
@@ -168,7 +169,7 @@ function Timeline({
   redoCutSegments: () => void,
   canUndoCutSegments: boolean,
   canRedoCutSegments: boolean,
-  onTimelineExport: (mode: TimelineExportMode, segmentsToExport: SegmentToExport[]) => void,
+  onTimelineExport: (intent: SegmentExportIntent, segmentsToExport: SegmentExportSnapshot[]) => void,
   removeSegments: UseSegments['removeSegments'],
   selectOnlySegment: UseSegments['selectOnlySegment'],
   toggleSegmentSelected: UseSegments['toggleSegmentSelected'],
@@ -187,7 +188,6 @@ function Timeline({
 }) {
   const { t } = useTranslation();
 
-  const { invertCutSegments } = useUserSettings();
 
   const timelineScrollerId = useId();
   const timelineScrollerRef = useRef<HTMLDivElement>(null);
@@ -215,34 +215,21 @@ function Timeline({
     timelineTimeToSourceTime,
   } = useMemo(() => {
     const timeEpsilon = Math.max(fileDurationNonZero / 1_000_000, 0.001);
-    let displayCursor = 0;
-    const completeItems: TimelineSegmentItem[] = [];
-
-    for (const [originalIndex, segment] of cutSegments.entries()) {
-      if (segment.end != null && segment.end > segment.start) {
-        const duration = segment.end - segment.start;
-        const displayStart = displayCursor;
-        const displayEnd = displayStart + duration;
-        displayCursor = displayEnd;
-
-        completeItems.push({
-          sourceSegment: segment,
-          displaySegment: { ...segment, start: displayStart, end: displayEnd },
-          originalIndex,
-          sourceStart: segment.start,
-          sourceEnd: segment.end,
-          displayStart,
-          displayEnd,
-        });
-      }
-    }
-
-    const displayDuration = displayCursor > 0 ? displayCursor : fileDurationNonZero;
+    const projection = buildTimelineProjection(cutSegments, fileDurationNonZero);
+    const completeItems: TimelineSegmentItem[] = projection.items.map(({ sourceSegment, displaySegment, originalIndex, source, display }) => ({
+      sourceSegment,
+      displaySegment,
+      originalIndex,
+      sourceStart: source.start,
+      sourceEnd: source.end,
+      displayStart: display.start,
+      displayEnd: display.end,
+    }));
+    const displayDuration = projection.displayDuration > 0 ? projection.displayDuration : fileDurationNonZero;
 
     const mapSourceToVisibleTimeline = (sourceTime: number) => {
-      const item = completeItems.find(({ sourceStart, sourceEnd }) => sourceEnd != null && sourceTime >= sourceStart - timeEpsilon && sourceTime <= sourceEnd + timeEpsilon);
-      if (item == null || item.sourceEnd == null || item.displayEnd == null) return undefined;
-      return Math.min(Math.max(item.displayStart + (sourceTime - item.sourceStart), item.displayStart), item.displayEnd);
+      if (projection.items.length === 0) return undefined;
+      return sourceTimeToDisplayTime(projection, Math.min(Math.max(sourceTime, 0), fileDurationNonZero));
     };
 
     const mapSourceToTimeline = (sourceTime: number) => {
@@ -256,9 +243,8 @@ function Timeline({
 
     const mapTimelineToSource = (timelineTime: number) => {
       const clampedTimelineTime = Math.min(Math.max(timelineTime, 0), displayDuration);
-      const item = completeItems.find(({ displayStart, displayEnd }) => displayEnd != null && clampedTimelineTime >= displayStart - timeEpsilon && clampedTimelineTime <= displayEnd + timeEpsilon);
-      if (item == null || item.sourceEnd == null || item.displayEnd == null) return clampedTimelineTime;
-      return Math.min(Math.max(item.sourceStart + (clampedTimelineTime - item.displayStart), item.sourceStart), item.sourceEnd);
+      if (projection.items.length === 0) return clampedTimelineTime;
+      return displayTimeToSourceTime(projection, clampedTimelineTime, 'next') ?? clampedTimelineTime;
     };
 
     const compactItemByIndex = new Map(completeItems.map((item) => [item.originalIndex, item]));
@@ -276,11 +262,9 @@ function Timeline({
       };
     });
 
-    let previousSourceEnd = 0;
     const sourceGaps = completeItems.some((item, index) => {
-      const hasGapBefore = index === 0 ? Math.abs(item.sourceStart) > timeEpsilon : Math.abs(item.sourceStart - previousSourceEnd) > timeEpsilon;
-      previousSourceEnd = item.sourceEnd ?? previousSourceEnd;
-      return hasGapBefore;
+      const previousSourceEnd = index === 0 ? 0 : completeItems[index - 1]?.sourceEnd;
+      return previousSourceEnd == null || Math.abs(item.sourceStart - previousSourceEnd) > timeEpsilon;
     });
     const lastSourceEnd = completeItems.at(-1)?.sourceEnd;
     const sourceDoesNotReachEnd = completeItems.length > 0 && (lastSourceEnd == null || Math.abs(lastSourceEnd - fileDurationNonZero) > timeEpsilon);
@@ -623,13 +607,10 @@ function Timeline({
 
   const onMouseOut = useCallback(() => setHoveringTime(undefined), [setHoveringTime]);
 
-  const selectedTimelineSegments = useMemo<SegmentToExport[]>(() => cutSegments.flatMap((seg, index) => {
-    if (!seg.selected || seg.end == null) return [];
-    return [{ start: seg.start, end: seg.end, name: seg.name, tags: seg.tags, originalIndex: index }];
-  }), [cutSegments]);
+  const selectedTimelineSegments = useMemo<SegmentExportSnapshot[]>(() => buildExplicitExportSegments(cutSegments, fileDurationNonZero), [cutSegments, fileDurationNonZero]);
   const selectedTimelineSegmentIds = useMemo(() => cutSegments.flatMap((seg) => (seg.selected ? [seg.segId] : [])), [cutSegments]);
 
-  const timelineContextSegmentsRef = useRef<SegmentToExport[]>(selectedTimelineSegments);
+  const timelineContextSegmentsRef = useRef<SegmentExportSnapshot[]>(selectedTimelineSegments);
   const timelineContextSegmentIdsRef = useRef<string[]>(selectedTimelineSegmentIds);
 
   useEffect(() => {
@@ -645,21 +626,13 @@ function Timeline({
   const contextMenuTemplate = useMemo<ContextMenuTemplate>(() => {
     const deleteMenuItem = { label: t('Delete'), click: removeTimelineContextSegments };
 
-    if (selectedTimelineSegments.length > 1) {
-      return [
-        { label: t('Export+merge'), click: () => onTimelineExport('merge', timelineContextSegmentsRef.current) },
-        { label: t('Separate files'), click: () => onTimelineExport('separate', timelineContextSegmentsRef.current) },
-        { type: 'separator' },
-        deleteMenuItem,
-      ];
-    }
-
     return [
-      { label: t('Export'), click: () => onTimelineExport('single', timelineContextSegmentsRef.current) },
+      { label: t('Separate files'), click: () => onTimelineExport('separate', timelineContextSegmentsRef.current) },
+      { label: t('Export+merge'), click: () => onTimelineExport('merge', timelineContextSegmentsRef.current) },
       { type: 'separator' },
       deleteMenuItem,
     ];
-  }, [onTimelineExport, removeTimelineContextSegments, selectedTimelineSegments.length, t]);
+  }, [onTimelineExport, removeTimelineContextSegments, t]);
 
   useContextMenu(timelineScrollerRef, contextMenuTemplate);
 
@@ -728,7 +701,7 @@ function Timeline({
   const getSegmentExportTarget = useCallback((index: number) => {
     const seg = cutSegments[index];
     if (seg == null || seg.end == null) return [];
-    const segmentToExport = [{ start: seg.start, end: seg.end, name: seg.name, tags: seg.tags, originalIndex: index }];
+    const segmentToExport = [{ segId: seg.segId, start: seg.start, end: seg.end, name: seg.name, tags: seg.tags, originalIndex: index }];
     if (seg.selected && selectedTimelineSegments.length > 0) return selectedTimelineSegments;
     return segmentToExport;
   }, [cutSegments, selectedTimelineSegments]);
@@ -767,8 +740,8 @@ function Timeline({
   }, [setZoom]);
 
   const onSplitCurrentSegmentPress = useCallback(() => {
-    splitCurrentSegment(playheadSourceTime);
-  }, [playheadSourceTime, splitCurrentSegment]);
+    splitCurrentSegment(timelineTimeToSourceTime(playheadTimelineTime));
+  }, [playheadTimelineTime, splitCurrentSegment, timelineTimeToSourceTime]);
 
   const onSeekLaneKeyDown = useCallback<KeyboardEventHandler<HTMLDivElement>>((e) => {
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
@@ -933,35 +906,20 @@ function Timeline({
               </div>
             )}
 
-            {!hasCompactSourceGaps && inverseCutSegments.map((seg) => (
-              <BetweenSegments
-                key={seg.segId}
-                start={seg.start}
-                end={seg.end}
-                fileDurationNonZero={fileDurationNonZero}
-                invertCutSegments={invertCutSegments}
+            {timelineSegments.map(({ sourceSegment, displaySegment, originalIndex }) => (
+              <TimelineSeg
+                key={sourceSegment.segId}
+                seg={displaySegment}
+                segNum={originalIndex}
+                onSegMouseDown={onSegmentMouseDown}
+                onSegContextMenuCapture={onSegmentContextMenuCapture}
+                isActive={originalIndex === currentSegIndexSafe}
+                fileDurationNonZero={timelineDisplayDuration}
+                formatTimecode={formatTimecode}
+                selected={sourceSegment.selected}
+                mediaLaneMode={hasMediaTimeline}
               />
             ))}
-
-            {timelineSegments.map(({ sourceSegment, displaySegment, originalIndex }) => {
-              const selected = invertCutSegments || sourceSegment.selected;
-
-              return (
-                <TimelineSeg
-                  key={sourceSegment.segId}
-                  seg={displaySegment}
-                  segNum={originalIndex}
-                  onSegMouseDown={onSegmentMouseDown}
-                  onSegContextMenuCapture={onSegmentContextMenuCapture}
-                  isActive={originalIndex === currentSegIndexSafe}
-                  fileDurationNonZero={timelineDisplayDuration}
-                  invertCutSegments={invertCutSegments}
-                  formatTimecode={formatTimecode}
-                  selected={selected}
-                  mediaLaneMode={hasMediaTimeline}
-                />
-              );
-            })}
 
             {cutBoundaryTimes.map((time) => (
               <div key={`cut-boundary-${time}`} className={styles['cut-boundary']} style={{ left: calculateTimelinePercent(time) }} />

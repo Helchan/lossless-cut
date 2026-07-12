@@ -13,8 +13,6 @@ export type UserSettingsContextType = Omit<UserSettingsRoot, 'settings'> & UserS
   toggleCaptureFormat: () => void,
   changeOutDir: () => Promise<void>,
   toggleKeyframeCut: (showMessage?: boolean) => void,
-  toggleExportConfirmEnabled: () => void,
-  toggleSimpleMode: () => void,
   toggleSafeOutputFileName: () => void,
   effectiveExportMode: ExportMode,
   ensureWritableOutDirWithFilePath: ({ outDir }: { outDir: string | undefined }) => Promise<string | undefined>,

@@ -35,9 +35,7 @@ export interface Config {
   segmentsToChaptersOnly: boolean,
   enableSmartCut: boolean,
   timecodeFormat: TimecodeFormat,
-  invertCutSegments: boolean,
   autoExportExtraStreams: boolean,
-  exportConfirmEnabled: boolean,
   askBeforeClose: boolean,
   enableImportChapters: EnableImportChapters,
   enableAskForFileOpenAction: boolean,
@@ -57,7 +55,6 @@ export interface Config {
   hideOsNotifications: 'all' | undefined,
   autoLoadTimecode: boolean,
   segmentsToChapters: boolean,
-  simpleMode: boolean,
   /** todo: rename to cutFileTemplate */
   outSegTemplate: string | undefined
   /** todo: rename to cutMergedFileTemplate */

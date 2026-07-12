@@ -2,7 +2,7 @@ import type { MouseEventHandler, MouseEvent as ReactMouseEvent } from 'react';
 import { memo, useCallback, useMemo } from 'react';
 import type { MotionStyle } from 'motion/react';
 import { motion, AnimatePresence } from 'motion/react';
-import { FaSave, FaTrashAlt } from 'react-icons/fa';
+import { FaSave } from 'react-icons/fa';
 import type { ColorInstance } from 'color';
 
 import useUserSettings from './hooks/useUserSettings';
@@ -84,7 +84,7 @@ function Marker({
 }
 
 function Segment({
-  seg, segNum, color, isActive, selected, onMouseDown, onContextMenuCapture, getTimePercent, formatTimecode, invertCutSegments, mediaLaneMode,
+  seg, segNum, color, isActive, selected, onMouseDown, onContextMenuCapture, getTimePercent, formatTimecode, mediaLaneMode,
 }: {
   seg: Omit<StateSegment, 'end'> & { end: number },
   segNum: number,
@@ -95,7 +95,6 @@ function Segment({
   onContextMenuCapture: MouseEventHandler<HTMLDivElement>,
   getTimePercent: (a: number) => string,
   formatTimecode: FormatTimecode,
-  invertCutSegments: boolean,
   mediaLaneMode: boolean,
 }) {
   const { darkMode, prefersReducedMotion, springAnimation } = useUserSettings();
@@ -104,7 +103,7 @@ function Segment({
   const border = useMemo(() => {
     const horizontalBorderWidth = mediaLaneMode ? '2px' : '1px';
     const verticalBorderWidth = mediaLaneMode ? '2px' : '1.5px';
-    const isSelected = !invertCutSegments && selected;
+    const isSelected = selected;
 
     if (mediaLaneMode && isSelected) {
       const selectedColor = 'rgba(255,255,255,0.96)';
@@ -143,7 +142,7 @@ function Segment({
       horizontal: `${horizontalBorderWidth} solid transparent`,
       vertical: `${verticalBorderWidth} solid transparent`,
     };
-  }, [darkMode, invertCutSegments, isActive, color, mediaLaneMode, selected]);
+  }, [darkMode, isActive, color, mediaLaneMode, selected]);
 
   const backgroundColor = useMemo(() => {
     // we use both transparency and lightness, so that segments can be visible when overlapping
@@ -151,10 +150,10 @@ function Segment({
       return 'transparent';
     }
 
-    if (invertCutSegments || !selected) return darkMode ? color.desaturate(0.3).lightness(30).alpha(0.5).string() : color.desaturate(0.3).lightness(70).alpha(0.5).string();
+    if (!selected) return darkMode ? color.desaturate(0.3).lightness(30).alpha(0.5).string() : color.desaturate(0.3).lightness(70).alpha(0.5).string();
     if (isActive) return darkMode ? color.saturate(0.2).lightness(60).alpha(0.7).string() : color.saturate(0.2).lightness(40).alpha(0.8).string();
     return darkMode ? color.desaturate(0.2).lightness(50).alpha(0.7).string() : color.lightness(35).alpha(0.6).string();
-  }, [darkMode, invertCutSegments, isActive, color, selected, mediaLaneMode]);
+  }, [darkMode, isActive, color, selected, mediaLaneMode]);
 
   const vertBorderRadius = mediaLaneMode ? 4 : 5;
 
@@ -216,17 +215,7 @@ function Segment({
           <div style={{ alignSelf: 'flex-start', flexShrink: 0, fontSize: 10, minWidth: 0, letterSpacing: '-.1em' }}>{segNum + 1}</div>
 
           <AnimatePresence>
-            {invertCutSegments && (
-              <motion.div
-                initial={{ scale: 0 }}
-                animate={{ scale: 1 }}
-                exit={{ scale: 0 }}
-                style={{ flexShrink: 1 }}
-              >
-                <FaTrashAlt style={{ display: 'block', width: '100%', minWidth: '.4em', color: 'white', marginRight: '.1em' }} />
-              </motion.div>
-            )}
-            {!invertCutSegments && !seg.name && (
+            {!seg.name && (
               <motion.div
                 initial={{ scale: 0 }}
                 animate={{ scale: 1 }}
@@ -250,7 +239,7 @@ function Segment({
 }
 
 function SegmentOrMarker({
-  seg, fileDurationNonZero, isActive, segNum, onSegMouseDown, onSegContextMenuCapture, invertCutSegments, formatTimecode, selected, mediaLaneMode = false,
+  seg, fileDurationNonZero, isActive, segNum, onSegMouseDown, onSegContextMenuCapture, formatTimecode, selected, mediaLaneMode = false,
 } : {
   seg: StateSegment,
   fileDurationNonZero: number,
@@ -258,7 +247,6 @@ function SegmentOrMarker({
   segNum: number,
   onSegMouseDown: (index: number, e: ReactMouseEvent) => void,
   onSegContextMenuCapture: (index: number, e: ReactMouseEvent) => void,
-  invertCutSegments: boolean,
   formatTimecode: FormatTimecode,
   selected: boolean,
   mediaLaneMode?: boolean,
@@ -273,7 +261,7 @@ function SegmentOrMarker({
   const onThisSegContextMenuCapture = useCallback<MouseEventHandler<HTMLDivElement>>((e) => onSegContextMenuCapture(segNum, e), [onSegContextMenuCapture, segNum]);
 
   if (seg.end != null) {
-    return <Segment seg={seg as Omit<StateSegment, 'end'> & { end: number }} segNum={segNum} color={segColor} selected={selected} isActive={isActive} onMouseDown={onThisSegMouseDown} onContextMenuCapture={onThisSegContextMenuCapture} getTimePercent={getTimePercent} formatTimecode={formatTimecode} invertCutSegments={invertCutSegments} mediaLaneMode={mediaLaneMode} />;
+    return <Segment seg={seg as Omit<StateSegment, 'end'> & { end: number }} segNum={segNum} color={segColor} selected={selected} isActive={isActive} onMouseDown={onThisSegMouseDown} onContextMenuCapture={onThisSegContextMenuCapture} getTimePercent={getTimePercent} formatTimecode={formatTimecode} mediaLaneMode={mediaLaneMode} />;
   }
 
   return (
