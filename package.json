@@ -11,7 +11,6 @@
     "clean": "rimraf dist out common-ts-dist main-ts-dist build-resources icon-build",
     "start": "electron-vite preview",
     "dev": "electron-vite dev -w",
-    "download-ffmpeg-darwin-x64": "mkdirp ffmpeg/darwin-x64 && cd ffmpeg/darwin-x64 && wget https://github.com/mifi/ffmpeg-build-script/releases/download/8.0-1/ffmpeg-macos-X64 -O ffmpeg && wget https://github.com/mifi/ffmpeg-build-script/releases/download/8.0-1/ffprobe-macos-X64 -O ffprobe && chmod +x ffmpeg && chmod +x ffprobe",
     "download-ffmpeg-darwin-arm64": "mkdirp ffmpeg/darwin-arm64 && cd ffmpeg/darwin-arm64 && wget https://github.com/mifi/ffmpeg-build-script/releases/download/8.0-1/ffmpeg-macos-ARM64 -O ffmpeg && wget https://github.com/mifi/ffmpeg-build-script/releases/download/8.0-1/ffprobe-macos-ARM64 -O ffprobe && chmod +x ffmpeg && chmod +x ffprobe",
     "download-ffmpeg-linux-x64": "mkdirp ffmpeg/linux-x64 && cd ffmpeg/linux-x64 && wget https://github.com/mifi/ffmpeg-builds/releases/download/8.0-1/ffmpeg-n8.0-latest-linux64-gpl-shared-8.0.tar.xz -O ffmpeg-ffprobe.xz && tar -xv -f ffmpeg-ffprobe.xz && mv ffmpeg-n8.0-latest-linux64-gpl-shared-8.0 extracted && mkdirp lib && mv extracted/bin/ffmpeg extracted/bin/ffprobe extracted/lib/lib*.so* lib",
     "download-ffmpeg-win32-x64": "mkdirp ffmpeg/win32-x64 && cd ffmpeg/win32-x64 && npx download-cli https://github.com/mifi/ffmpeg-builds/releases/download/8.0-1/ffmpeg-n8.0-latest-win64-gpl-shared-8.0.zip --out . --filename ffmpeg-ffprobe.zip && 7z x ffmpeg-ffprobe.zip && mkdirp lib && cd ffmpeg-n8.0-latest-win64-gpl-shared-8.0/bin && npx shx mv ffmpeg.exe ffprobe.exe *.dll ../../lib",
@@ -23,8 +22,8 @@
     "lint": "eslint --ext .js,.ts,.jsx,.tsx,.mjs,.mts .",
     "check": "yarn tsc && yarn lint && yarn test run && yarn build && yarn check-licenses && yarn scan-i18n && yarn dedupe --check && yarn generate-docs",
     "pack-mac": "yarn build && electron-builder --mac dmg",
-    "pack-mac-local": "bash script/build-macos-dmg.sh --arch both",
-    "pack-mas-dev": "yarn build && electron-builder --mac mas-dev -c.mas.provisioningProfile=LosslessCut_Dev.provisionprofile -c.mas.identity='Mikael Finstad (JH4PH8B3C8)'",
+    "pack-mac-local": "bash script/build-macos-dmg.sh --arch arm64",
+    "pack-mas-dev": "yarn build && electron-builder --mac mas-dev --arm64 -c.mas.provisioningProfile=LosslessCut_Dev.provisionprofile -c.mas.identity='Mikael Finstad (JH4PH8B3C8)'",
     "pack-win": "yarn build && electron-builder --win zip --x64",
     "postinstall": "electron-builder install-app-deps",
     "version": "node script/postversion.ts && git add no.mifi.losslesscut.appdata.xml",
@@ -191,12 +190,11 @@
       "target": [
         {
           "target": "mas",
-          "arch": "universal"
+          "arch": "arm64"
         },
         {
           "target": "dmg",
           "arch": [
-            "x64",
             "arm64"
           ]
         }

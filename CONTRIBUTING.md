@@ -20,7 +20,6 @@ Note: `yarn` may take some time to complete.
 
 Run one of the below commands:
 ```bash
-yarn download-ffmpeg-darwin-x64
 yarn download-ffmpeg-darwin-arm64
 yarn download-ffmpeg-linux-x64
 yarn download-ffmpeg-win32-x64
@@ -99,15 +98,11 @@ Before releasing, consider [Maintainence chores](#maintainence-chores) first.
 - *If normal GitHub-first release*
   - `npm version minor && git --no-pager show`
 - `git push --follow-tags`
-- Wait for build and draft in Github actions
+- Pushing the matching `vX.Y.Z` tag automatically builds the Windows x64 archive and macOS arm64 DMG, then publishes the GitHub release.
 
 ### Release built version
 
-- Open draft in github and add the prepared release notes
-- *If GitHub release*
-  - Release the draft
-- *If Store-only hotfix release*
-  - Remove all other artifacts and release the draft as **pre-release**
+- Open the published GitHub release to review or edit its generated release notes.
 
 #### After releasing in GitHub
 

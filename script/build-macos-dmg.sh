@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ARCH="both"
+ARCH="arm64"
 SKIP_INSTALL=0
 SKIP_FFMPEG=0
 BUILT_DMGS=()
 
 usage() {
   cat <<'USAGE'
-Usage: script/build-macos-dmg.sh [--arch arm64|x64|both] [--skip-install] [--skip-ffmpeg-download]
+Usage: script/build-macos-dmg.sh [--arch arm64] [--skip-install] [--skip-ffmpeg-download]
 
 Build local macOS DMGs for LosslessCut, verify them with hdiutil, and print SHA-256 hashes.
 
 Options:
-  --arch arm64|x64|both       macOS architecture(s) to package. Default: both.
+  --arch arm64                macOS architecture to package. Default: arm64.
   --skip-install              Skip yarn install --immutable.
   --skip-ffmpeg-download      Use existing ffmpeg resources without downloading missing files.
   -h, --help                  Show this help.
@@ -47,9 +47,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$ARCH" in
-  arm64|x64|both) ;;
+  arm64) ;;
   *)
-    echo "--arch must be one of: arm64, x64, both" >&2
+    echo "--arch must be arm64" >&2
     exit 2
     ;;
 esac
@@ -113,23 +113,11 @@ if [[ "$SKIP_INSTALL" -eq 0 ]]; then
 fi
 
 if [[ "$SKIP_FFMPEG" -eq 0 ]]; then
-  if [[ "$ARCH" == "arm64" || "$ARCH" == "both" ]]; then
-    ensure_macos_ffmpeg "darwin-arm64" "arm64" "ARM64"
-  fi
-
-  if [[ "$ARCH" == "x64" || "$ARCH" == "both" ]]; then
-    ensure_macos_ffmpeg "darwin-x64" "x64" "X64"
-  fi
+  ensure_macos_ffmpeg "darwin-arm64" "arm64" "ARM64"
 fi
 
 yarn build
 
-if [[ "$ARCH" == "arm64" || "$ARCH" == "both" ]]; then
-  build_dmg "arm64"
-fi
-
-if [[ "$ARCH" == "x64" || "$ARCH" == "both" ]]; then
-  build_dmg "x64"
-fi
+build_dmg "arm64"
 
 shasum -a 256 "${BUILT_DMGS[@]}"
