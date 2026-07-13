@@ -26,7 +26,8 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          test "$TAG" = "v$(node -p \"require('./package.json').version\")"
+          VERSION="$(node -p "require('./package.json').version")"
+          test "$TAG" = "v$VERSION"
 
   package:
     name: Package ${{ matrix.name }}
