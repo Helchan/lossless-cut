@@ -12,6 +12,9 @@ import {
   buildSourcePreservingConcatManifest,
   buildSourcePreservingSegmentPlan,
   containsH264IdrAccessUnit,
+  getSourcePreservingBoundaryBFrames,
+  getSourcePreservingPacketPresentationDuration,
+  getSourcePreservingVideoPresentationDuration,
   type SourcePreservingPart,
   type SourcePreservingSpan,
 } from '../src/renderer/src/sourcePreservingExport.ts';
@@ -56,6 +59,7 @@ interface ProbeStream {
   bit_rate?: string | undefined,
   nb_read_packets?: string | undefined,
   avg_frame_rate?: string | undefined,
+  has_b_frames?: number | undefined,
 }
 
 interface ProbeMeta {
@@ -72,6 +76,7 @@ interface ProbeMeta {
 interface PacketInfo {
   stream_index: number,
   pts_time?: string | undefined,
+  duration_time?: string | undefined,
   size?: string | undefined,
   flags?: string | undefined,
   data_hash?: string | undefined,
@@ -101,7 +106,7 @@ async function readPackets(path: string, streamIndex?: number | undefined, hash 
     ...(streamIndex == null ? [] : ['-select_streams', String(streamIndex)]),
     '-show_packets',
     ...(hash ? ['-show_data_hash', 'sha256'] : []),
-    '-show_entries', 'packet=stream_index,pts_time,size,flags,data_hash',
+    '-show_entries', 'packet=stream_index,pts_time,duration_time,size,flags,data_hash',
     '-of', 'json', path,
   ]);
   const parsed = JSON.parse(stdout.toString('utf8')) as { packets?: PacketInfo[] | undefined };
@@ -142,7 +147,7 @@ async function concatMp4(paths: string[], durations: number[], outputPath: strin
   ], manifest);
 }
 
-async function exportPart({ sourcePath, part, outputPath, videoBitrate, videoProfile, pixelFormat, timescale }: {
+async function exportPart({ sourcePath, part, outputPath, videoBitrate, videoProfile, pixelFormat, timescale, sourceBFrames }: {
   sourcePath: string,
   part: SourcePreservingPart,
   outputPath: string,
@@ -150,6 +155,7 @@ async function exportPart({ sourcePath, part, outputPath, videoBitrate, videoPro
   videoProfile?: string | undefined,
   pixelFormat?: string | undefined,
   timescale: number,
+  sourceBFrames: number | undefined,
 }) {
   const duration = part.end - part.start;
   if (part.mode === 'copy') {
@@ -183,7 +189,7 @@ async function exportPart({ sourcePath, part, outputPath, videoBitrate, videoPro
     '-map', '0:v:0', '-vf', `setpts=PTS-STARTPTS,trim=duration=${formatNumber(duration)},setpts=PTS-STARTPTS`, '-c:v', 'libx264', '-b:v', String(videoBitrate),
     ...(x264Profile != null ? ['-profile:v', x264Profile] : []),
     ...(pixelFormat != null ? ['-pix_fmt', pixelFormat] : []),
-    '-bf', '0',
+    '-bf', String(getSourcePreservingBoundaryBFrames(sourceBFrames)),
     '-an',
     '-video_track_timescale', String(timescale), '-y', outputPath,
   ]);
@@ -273,6 +279,9 @@ try {
   const fps = fpsNumerator! / fpsDenominator!;
   assert(Number.isFinite(fps) && fps > 0);
   const sourceDuration = Number.parseFloat(sourceMeta.format.duration);
+  const sourceTimelineStart = parseNumber(sourceMeta.format.start_time) ?? 0;
+  const sourceVideoStart = parseNumber(sourceVideo.start_time) ?? 0;
+  const sourceVideoEnd = sourceVideoStart + (parseNumber(sourceVideo.duration) ?? sourceDuration) - sourceTimelineStart;
 
   const spans: SourcePreservingSpan[] = realSourcePath == null
     ? [{ start: 3.1, end: 18.4 }, { start: 23.3, end: 39.1 }, { start: 43.7, end: 57.4 }]
@@ -318,7 +327,7 @@ try {
     const partPaths: string[] = [];
     for (const [partIndex, part] of plan.parts.entries()) {
       const partPath = join(workDir, `segment-${segmentIndex}-part-${partIndex}.mp4`);
-      await exportPart({ sourcePath, part, outputPath: partPath, videoBitrate: boundaryBitrate, videoProfile: sourceVideo.profile, pixelFormat: sourceVideo.pix_fmt, timescale });
+      await exportPart({ sourcePath, part, outputPath: partPath, videoBitrate: boundaryBitrate, videoProfile: sourceVideo.profile, pixelFormat: sourceVideo.pix_fmt, timescale, sourceBFrames: sourceVideo.has_b_frames });
       partPaths.push(partPath);
     }
     const segmentPath = join(workDir, `segment-${segmentIndex}.mp4`);
@@ -343,6 +352,16 @@ try {
   const independentDuration = spans[0]!.end - spans[0]!.start;
   await muxVideoAudio({ videoPath: segmentPaths[0]!, audioPath: independentAudioPath, outputPath: independentPath, duration: independentDuration, timescale });
   const independentMeta = await probe(independentPath, true);
+  const independentVideoPresentationDuration = getSourcePreservingPacketPresentationDuration({
+    packets: (await readPackets(independentPath, 0)).flatMap(({ pts_time, duration_time }) => {
+      const time = parseNumber(pts_time);
+      if (time == null) return [];
+      const duration = parseNumber(duration_time);
+      return [{ time, ...(duration != null ? { duration } : {}) }];
+    }),
+    fallbackFrameDuration: 1 / fps,
+  });
+  const expectedIndependentVideoDuration = getSourcePreservingVideoPresentationDuration({ spans: [spans[0]!], sourceVideoEnd });
   assertSourcePreservingExportMeta({
     meta: independentMeta,
     expectedDuration: independentDuration,
@@ -352,6 +371,8 @@ try {
       { codecType: 'audio', codecName: sourceAudio.codec_name },
     ],
     expectedFrameDuration: 1 / fps,
+    actualVideoPresentationDuration: independentVideoPresentationDuration,
+    expectedVideoPresentationDuration: expectedIndependentVideoDuration,
   });
   assert.equal(
     Number.parseInt(independentMeta.streams.find(({ codec_type }) => codec_type === 'video')?.nb_read_packets ?? '', 10),
@@ -360,6 +381,16 @@ try {
   await run(ffmpegPath, ['-v', 'error', '-xerror', '-i', independentPath, '-f', 'null', '-']);
 
   const mergedMeta = await probe(mergedPath, true);
+  const mergedVideoPresentationDuration = getSourcePreservingPacketPresentationDuration({
+    packets: (await readPackets(mergedPath, 0)).flatMap(({ pts_time, duration_time }) => {
+      const time = parseNumber(pts_time);
+      if (time == null) return [];
+      const duration = parseNumber(duration_time);
+      return [{ time, ...(duration != null ? { duration } : {}) }];
+    }),
+    fallbackFrameDuration: 1 / fps,
+  });
+  const expectedMergedVideoDuration = getSourcePreservingVideoPresentationDuration({ spans, sourceVideoEnd });
   assertSourcePreservingExportMeta({
     meta: mergedMeta,
     expectedDuration,
@@ -369,6 +400,8 @@ try {
       { codecType: 'audio', codecName: sourceAudio.codec_name },
     ],
     expectedFrameDuration: 1 / fps,
+    actualVideoPresentationDuration: mergedVideoPresentationDuration,
+    expectedVideoPresentationDuration: expectedMergedVideoDuration,
   });
   const outputVideo = mergedMeta.streams.find(({ codec_type }) => codec_type === 'video');
   const outputAudio = mergedMeta.streams.find(({ codec_type }) => codec_type === 'audio');
@@ -389,9 +422,20 @@ try {
 
   const frameTimes = await decodedFrameTimes(mergedPath);
   assert.equal(frameTimes.length, expectedVideoPackets.length);
+  const sourceFrameGaps = spans.flatMap((span) => {
+    const times = packetsInSpans(sourceVideoPackets, [span])
+      .flatMap(({ pts_time }) => {
+        const time = parseNumber(pts_time);
+        return time == null ? [] : [time];
+      })
+      .toSorted((a, b) => a - b);
+    return times.slice(1).map((time, index) => time - times[index]!);
+  });
+  const sourceTimebaseTick = 1 / timescale;
+  const maxExpectedFrameGap = Math.max(1 / fps, ...sourceFrameGaps) + sourceTimebaseTick * 2;
   for (let index = 1; index < frameTimes.length; index += 1) {
     const delta = frameTimes[index]! - frameTimes[index - 1]!;
-    assert(delta > 0 && delta <= (1 / fps) * 1.01, `Unexpected frame timestamp gap ${delta} at ${index}`);
+    assert(delta > 0 && delta <= maxExpectedFrameGap, `Unexpected frame timestamp gap ${delta} at ${index}`);
   }
 
   const sourceHashedPackets = await readPackets(sourcePath, undefined, true);

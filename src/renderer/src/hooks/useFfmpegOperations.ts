@@ -18,7 +18,7 @@ import mainApi from '../mainApi';
 import { formatFfmpegNumber, getHwaccelArgs } from '../../../common/util';
 import type { SegmentExportIntent } from '../segmentExportPlan';
 import { snapSourceTimeToFramePts } from '../timelineSegments';
-import { assertSourcePreservingExportMeta, buildSourcePreservingConcatManifest, buildSourcePreservingSegmentPlan, containsH264IdrAccessUnit, SourcePreservingVerificationError } from '../sourcePreservingExport';
+import { assertSourcePreservingExportMeta, buildSourcePreservingConcatManifest, buildSourcePreservingSegmentPlan, containsH264IdrAccessUnit, getSourcePreservingBoundaryBFrames, getSourcePreservingPacketPresentationDuration, getSourcePreservingVideoPresentationDuration, SourcePreservingVerificationError } from '../sourcePreservingExport';
 import { createMonotonicProgressReporter, mapProgressRange, sourcePreservingProgressPhases } from '../sourcePreservingProgress';
 
 const { join, resolve, dirname } = window.require('node:path');
@@ -581,7 +581,7 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
       ...getVideoTimescaleArgs(videoTimebase),
 
       ...(forceClosedGop && ['libx264', 'libx265', 'h264_videotoolbox', 'hevc_videotoolbox'].includes(videoCodec)
-        ? ['-bf', '0']
+        ? ['-bf', String(getSourcePreservingBoundaryBFrames(hasBFrames))]
         : (!forceClosedGop && hasBFrames ? ['-bf', String(hasBFrames)] : [])),
 
       ...getExperimentalArgs(ffmpegExperimental),
@@ -1102,6 +1102,11 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
     if (Number.isFinite(parsedVideoStartTime) && Math.abs(parsedVideoStartTime - sourceStartTime) > videoStartTolerance) {
       throw new UserFacingError(i18n.t('Precise export cannot preserve a source whose video track is delayed relative to the container timeline.'));
     }
+    const parsedVideoDuration = Number.parseFloat(primaryVideoStream.duration ?? '');
+    const sourceVideoEnd = Number.isFinite(parsedVideoDuration)
+      ? (Number.isFinite(parsedVideoStartTime) ? parsedVideoStartTime : sourceStartTime) + parsedVideoDuration - sourceStartTime
+      : effectiveFileDuration;
+    if (sourceVideoEnd == null) throw new UserFacingError(i18n.t('Unable to determine the source video duration for precise export.'));
     let snappedCutPointCount = 0;
 
     const snapBoundary = async (time: number) => {
@@ -1318,6 +1323,7 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
       const segmentDurations = exactSegments.map(({ start, end }) => end - start);
       let stagedPaths: string[];
       let expectedDurations: number[];
+      let expectedVideoDurations: number[];
       let verificationTimesByArtifact: number[][];
       if (intent === 'merge') {
         const mergedVideoPath = stagedSegmentVideoPaths.length === 1
@@ -1385,6 +1391,7 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
         });
         stagedPaths = [stagedMergedPath];
         expectedDurations = [expectedDuration];
+        expectedVideoDurations = [getSourcePreservingVideoPresentationDuration({ spans: exactSegments, sourceVideoEnd })];
         let elapsed = 0;
         const mergedVerificationTimes: number[] = [];
         segmentPlans.forEach((plan, index) => {
@@ -1436,6 +1443,7 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
           stagedPaths.push(stagedPath);
         }
         expectedDurations = segmentDurations;
+        expectedVideoDurations = exactSegments.map((segment) => getSourcePreservingVideoPresentationDuration({ spans: [segment], sourceVideoEnd }));
         verificationTimesByArtifact = segmentPlans.map((plan) => plan.parts.slice(0, -1).map(({ end }) => end - plan.span.start));
       }
       progressReporter.report(sourcePreservingProgressPhases.finalMediaEnd);
@@ -1443,12 +1451,13 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
       const expectedFrameDuration = detectedFps != null ? getFrameDuration(detectedFps) : undefined;
       const verificationJobs = stagedPaths.map((stagedPath, index) => {
         const expectedDuration = expectedDurations[index]!;
+        const expectedVideoDuration = expectedVideoDurations[index]!;
         const decodeWindowStarts = [...new Set([
           0,
           Math.max(expectedDuration - 2, 0),
           ...verificationTimesByArtifact[index]!.map((time) => Math.max(time - 1, 0)),
         ])];
-        return { stagedPath, expectedDuration, decodeWindowStarts };
+        return { stagedPath, expectedDuration, expectedVideoDuration, decodeWindowStarts };
       });
       const totalVerificationUnits = sum(verificationJobs.map(({ decodeWindowStarts }) => 1 + decodeWindowStarts.length));
       let completedVerificationUnits = 0;
@@ -1460,10 +1469,31 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
           sourcePreservingProgressPhases.verificationEnd,
         );
       };
-      for (const { stagedPath, expectedDuration, decodeWindowStarts } of verificationJobs) {
+      for (const { stagedPath, expectedDuration, expectedVideoDuration, decodeWindowStarts } of verificationJobs) {
         try {
           const meta = await readFileFfprobeMeta(stagedPath);
-          assertSourcePreservingExportMeta({ meta, expectedDuration, expectedFormat: outFormat, expectedTemporalCodecs, expectedFrameDuration });
+          const outputVideoStream = meta.streams.find((stream) => stream.codec_type === 'video' && stream.disposition?.attached_pic !== 1);
+          if (outputVideoStream == null) throw new UserFacingError(i18n.t('Precise export produced no video track.'));
+          const presentationPackets = await readFrames({
+            filePath: stagedPath,
+            from: Math.max(expectedVideoDuration - 2, 0),
+            to: expectedDuration + 1,
+            streamIndex: outputVideoStream.index,
+          });
+          const actualVideoPresentationDuration = getSourcePreservingPacketPresentationDuration({
+            packets: presentationPackets,
+            fallbackFrameDuration: expectedFrameDuration ?? 0.04,
+          });
+          assertSourcePreservingExportMeta({
+            meta,
+            expectedDuration,
+            expectedFormat: outFormat,
+            expectedTemporalCodecs,
+            expectedFrameDuration,
+            actualVideoPresentationDuration,
+            expectedVideoPresentationDuration: expectedVideoDuration,
+            expectedContainerDuration: audioStreams.length > 0 ? expectedDuration : expectedVideoDuration,
+          });
           advanceVerificationProgress();
 
           for (const start of decodeWindowStarts) {

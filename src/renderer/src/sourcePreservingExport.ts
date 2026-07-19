@@ -56,6 +56,63 @@ function durationOf({ start, end }: SourcePreservingSpan) {
 }
 
 /**
+ * Keeps the boundary encoder's decode reordering compatible with copied GOPs.
+ * A zero-B-frame prefix followed by source B-frames forces the concat muxer to
+ * rewrite DTS values even though the presentation timestamps are continuous.
+ */
+export function getSourcePreservingBoundaryBFrames(hasBFrames: number | undefined) {
+  if (hasBFrames == null || !Number.isFinite(hasBFrames)) return 0;
+  return Math.max(0, Math.min(Math.trunc(hasBFrames), 16));
+}
+
+/**
+ * Returns the end of the selected video presentation on the exported timeline.
+ * The container or an audio track may legitimately outlive the source video.
+ */
+export function getSourcePreservingVideoPresentationDuration({
+  spans,
+  sourceVideoEnd,
+}: {
+  spans: readonly SourcePreservingSpan[],
+  sourceVideoEnd: number,
+}) {
+  if (!Number.isFinite(sourceVideoEnd) || sourceVideoEnd < 0) throw new Error('Source video end must be finite and non-negative');
+
+  let elapsed = 0;
+  let presentationEnd = 0;
+  spans.forEach((span) => {
+    const spanDuration = durationOf(span);
+    if (!Number.isFinite(spanDuration) || span.start < 0 || spanDuration <= 0) {
+      throw new Error('Source-preserving video spans must satisfy 0 <= start < end');
+    }
+    const availableDuration = Math.max(Math.min(span.end, sourceVideoEnd) - span.start, 0);
+    if (availableDuration > 0) presentationEnd = elapsed + availableDuration;
+    elapsed += spanDuration;
+  });
+  return presentationEnd;
+}
+
+export function getSourcePreservingPacketPresentationDuration({
+  packets,
+  fallbackFrameDuration,
+}: {
+  packets: readonly { time: number, duration?: number | undefined }[],
+  fallbackFrameDuration: number,
+}) {
+  if (!Number.isFinite(fallbackFrameDuration) || fallbackFrameDuration <= 0) {
+    throw new Error('Fallback frame duration must be positive and finite');
+  }
+  if (packets.length === 0) return undefined;
+
+  return packets.reduce((latestEnd, packet) => {
+    const duration = packet.duration != null && Number.isFinite(packet.duration) && packet.duration > 0
+      ? packet.duration
+      : fallbackFrameDuration;
+    return Math.max(latestEnd, packet.time + duration);
+  }, Number.NEGATIVE_INFINITY);
+}
+
+/**
  * Builds a half-open [start, end) export plan. Complete GOPs stay byte-for-byte
  * copied. Only the leading/trailing dependency regions are encoded. If both
  * dependency regions overlap, the selected short segment is encoded once.
@@ -207,12 +264,18 @@ export function verifySourcePreservingExportMeta({
   expectedFormat,
   expectedTemporalCodecs,
   expectedFrameDuration,
+  actualVideoPresentationDuration,
+  expectedVideoPresentationDuration,
+  expectedContainerDuration = expectedDuration,
 }: {
   meta: SourcePreservingProbeMeta,
   expectedDuration: number,
   expectedFormat: string,
   expectedTemporalCodecs: ExpectedTemporalCodec[],
   expectedFrameDuration?: number | undefined,
+  actualVideoPresentationDuration?: number | undefined,
+  expectedVideoPresentationDuration?: number | undefined,
+  expectedContainerDuration?: number | undefined,
 }) {
   const issues: SourcePreservingVerificationIssue[] = [];
   if (!formatMatches(meta.format?.format_name, expectedFormat)) {
@@ -243,16 +306,27 @@ export function verifySourcePreservingExportMeta({
   });
 
   streams.forEach((stream) => {
-    const tolerance = stream.codec_type === 'video'
-      ? Math.max(expectedFrameDuration ?? 0.04, 0.001)
+    const isVideo = stream.codec_type === 'video';
+    const tolerance = isVideo
+      ? Math.max(
+        actualVideoPresentationDuration != null && expectedVideoPresentationDuration != null
+          ? (expectedFrameDuration ?? 0.04) / 2
+          : (expectedFrameDuration ?? 0.04),
+        0.001,
+      )
       : getAudioPacketTolerance(stream);
     const start = parseFinite(stream.start_time) ?? 0;
     if (Math.abs(start) > tolerance) {
       issues.push({ code: 'START_TIME_MISMATCH', message: `Output ${stream.codec_type ?? 'stream'} starts at ${start}, expected zero` });
     }
-    const duration = getStreamDuration(stream);
-    if (duration == null || Math.abs(duration - expectedDuration) > tolerance) {
-      issues.push({ code: 'DURATION_MISMATCH', message: `Output ${stream.codec_type ?? 'stream'} duration ${duration ?? '(unknown)'} differs from ${expectedDuration}` });
+    const duration = isVideo && actualVideoPresentationDuration != null
+      ? actualVideoPresentationDuration
+      : getStreamDuration(stream);
+    const streamExpectedDuration = isVideo && expectedVideoPresentationDuration != null
+      ? expectedVideoPresentationDuration
+      : expectedDuration;
+    if (duration == null || Math.abs(duration - streamExpectedDuration) > tolerance) {
+      issues.push({ code: 'DURATION_MISMATCH', message: `Output ${stream.codec_type ?? 'stream'} duration ${duration ?? '(unknown)'} differs from ${streamExpectedDuration}` });
     }
   });
 
@@ -262,8 +336,8 @@ export function verifySourcePreservingExportMeta({
   if (Math.abs(formatStart) > formatTolerance) {
     issues.push({ code: 'START_TIME_MISMATCH', message: `Output container starts at ${formatStart}, expected zero` });
   }
-  if (containerDuration == null || Math.abs(containerDuration - expectedDuration) > formatTolerance) {
-    issues.push({ code: 'DURATION_MISMATCH', message: `Output container duration ${containerDuration ?? '(unknown)'} differs from ${expectedDuration}` });
+  if (containerDuration == null || Math.abs(containerDuration - expectedContainerDuration) > formatTolerance) {
+    issues.push({ code: 'DURATION_MISMATCH', message: `Output container duration ${containerDuration ?? '(unknown)'} differs from ${expectedContainerDuration}` });
   }
 
   return { ok: issues.length === 0, issues };

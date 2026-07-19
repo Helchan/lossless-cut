@@ -4,6 +4,9 @@ import {
   buildSourcePreservingConcatManifest,
   buildSourcePreservingSegmentPlan,
   containsH264IdrAccessUnit,
+  getSourcePreservingBoundaryBFrames,
+  getSourcePreservingPacketPresentationDuration,
+  getSourcePreservingVideoPresentationDuration,
   verifySourcePreservingExportMeta,
 } from './sourcePreservingExport';
 
@@ -72,6 +75,39 @@ describe('buildSourcePreservingSegmentPlan', () => {
   });
 });
 
+describe('source-preserving video timing', () => {
+  test('keeps boundary B-frame reordering aligned with the copied source', () => {
+    expect(getSourcePreservingBoundaryBFrames(3)).toBe(3);
+    expect(getSourcePreservingBoundaryBFrames(undefined)).toBe(0);
+    expect(getSourcePreservingBoundaryBFrames(Number.NaN)).toBe(0);
+  });
+
+  test('uses source video coverage when audio and the container end later', () => {
+    expect(getSourcePreservingVideoPresentationDuration({
+      spans: [{ start: 58.233, end: 117.469751 }],
+      sourceVideoEnd: 117.433312,
+    })).toBeCloseTo(59.200312, 9);
+  });
+
+  test('maps the final selected video packet onto a merged timeline', () => {
+    expect(getSourcePreservingVideoPresentationDuration({
+      spans: [{ start: 3, end: 8 }, { start: 10, end: 15 }],
+      sourceVideoEnd: 14.9,
+    })).toBeCloseTo(9.9, 9);
+  });
+
+  test('derives presentation duration from packet PTS rather than decode duration metadata', () => {
+    expect(getSourcePreservingPacketPresentationDuration({
+      packets: [
+        { time: 59.1, duration: 0.033 },
+        { time: 59.167, duration: 0.033313 },
+        { time: 59.134, duration: 0.033 },
+      ],
+      fallbackFrameDuration: 1 / 30,
+    })).toBeCloseTo(59.200313, 9);
+  });
+});
+
 test('concat manifest pins every transition to its planned video duration', () => {
   expect(buildSourcePreservingConcatManifest({
     paths: ['/tmp/prefix.mp4', "/tmp/tail's.mp4"],
@@ -107,6 +143,51 @@ describe('verifySourcePreservingExportMeta', () => {
       },
     });
     expect(result).toEqual({ ok: true, issues: [] });
+  });
+
+  test('accepts B-frame decode-duration metadata only when presentation coverage is exact', () => {
+    const result = verifySourcePreservingExportMeta({
+      expectedDuration: 59.236751,
+      expectedFormat: 'mp4',
+      expectedTemporalCodecs: [
+        { codecType: 'video', codecName: 'h264' },
+        { codecType: 'audio', codecName: 'aac' },
+      ],
+      expectedFrameDuration: 1 / 30,
+      expectedVideoPresentationDuration: 59.200312,
+      actualVideoPresentationDuration: 59.200313,
+      meta: {
+        format: { format_name: 'mov,mp4,m4a,3gp,3g2,mj2', start_time: '0', duration: '59.236751' },
+        streams: [
+          { codec_type: 'video', codec_name: 'h264', start_time: '0', duration: '59.100313', time_base: '1/16000' },
+          { codec_type: 'audio', codec_name: 'aac', start_time: '0', duration: '59.236735', sample_rate: '44100' },
+        ],
+      },
+    });
+    expect(result).toEqual({ ok: true, issues: [] });
+  });
+
+  test('rejects a missing final presentation frame even when decode-duration metadata looks similar', () => {
+    const result = verifySourcePreservingExportMeta({
+      expectedDuration: 59.236751,
+      expectedFormat: 'mp4',
+      expectedTemporalCodecs: [
+        { codecType: 'video', codecName: 'h264' },
+        { codecType: 'audio', codecName: 'aac' },
+      ],
+      expectedFrameDuration: 1 / 30,
+      expectedVideoPresentationDuration: 59.200312,
+      actualVideoPresentationDuration: 59.16698,
+      meta: {
+        format: { format_name: 'mov,mp4,m4a,3gp,3g2,mj2', start_time: '0', duration: '59.236751' },
+        streams: [
+          { codec_type: 'video', codec_name: 'h264', start_time: '0', duration: '59.100313', time_base: '1/16000' },
+          { codec_type: 'audio', codec_name: 'aac', start_time: '0', duration: '59.236735', sample_rate: '44100' },
+        ],
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual(expect.objectContaining({ code: 'DURATION_MISMATCH' }));
   });
 
   test('rejects the old forced MKV/WavPack result', () => {
