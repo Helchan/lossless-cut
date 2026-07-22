@@ -20,6 +20,9 @@ import type { SegmentExportIntent } from '../segmentExportPlan';
 import { snapSourceTimeToFramePts } from '../timelineSegments';
 import { assertSourcePreservingExportMeta, buildSourcePreservingConcatManifest, buildSourcePreservingSegmentPlan, buildSourcePreservingVideoFilter, containsH264IdrAccessUnit, getSourcePreservingBoundaryBFrames, getSourcePreservingPacketPresentationDuration, getSourcePreservingVideoPresentationDuration, SourcePreservingVerificationError } from '../sourcePreservingExport';
 import { createMonotonicProgressReporter, mapProgressRange, sourcePreservingProgressPhases } from '../sourcePreservingProgress';
+import { MergeTransitionPlanError } from '../mergeTransition';
+import { buildLastFrameReadWindow, buildSnappedMergeTransitionPreflight, buildTransitionIdrSearchPlan, getLastFrameOffset, normalizeFramePts, type MergeTransitionSnapshot } from '../mergeTransitionExport';
+import { minimumMergeTransitionDuration } from '../../../common/mergeTransition';
 
 const { join, resolve, dirname } = window.require('node:path');
 const { writeFile, mkdir, mkdtemp, rm, rename, access, link, copyFile, constants: { W_OK } } = window.require('node:fs/promises');
@@ -30,6 +33,10 @@ export class OutputNotWritableError extends Error {
     super();
     this.name = 'OutputNotWritableError';
   }
+}
+
+function formatTransitionSeconds(value: number) {
+  return value.toFixed(6).replace(/(?:\.0+|(?:(\.\d*?)0+))$/, '$1');
 }
 
 async function writeChaptersFfmetadata(outDir: string, chapters: Chapter[] | undefined) {
@@ -1043,6 +1050,7 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
     preserveMetadata,
     preserveMovData,
     movFastStart,
+    mergeTransition,
     onProgress,
   }: {
     intent: SegmentExportIntent,
@@ -1059,6 +1067,7 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
     preserveMetadata: PreserveMetadata,
     preserveMovData: boolean,
     movFastStart: boolean,
+    mergeTransition: MergeTransitionSnapshot,
     onProgress: (progress: number) => void,
   }) => {
     invariant(filePath != null);
@@ -1138,6 +1147,35 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
       return { ...segment, start, end };
     }, { concurrency: 1 });
 
+    let mergeTransitionPlan;
+    try {
+      mergeTransitionPlan = buildSnappedMergeTransitionPreflight({
+        intent,
+        snapshot: mergeTransition,
+        spans: exactSegments,
+      });
+    } catch (err) {
+      if (!(err instanceof MergeTransitionPlanError)) throw err;
+      if (err.code === 'invalid-duration') {
+        throw new UserFacingError(i18n.t(
+          'Fade-through-black transition duration must be a finite number of at least {{minimumDuration}}s.',
+          { minimumDuration: formatTransitionSeconds(minimumMergeTransitionDuration) },
+        ));
+      }
+      if (err.code === 'segment-too-short') {
+        invariant(err.segmentIndex != null && err.actualDuration != null && err.requiredDuration != null);
+        throw new UserFacingError(i18n.t(
+          'Segment {{segmentNumber}} is {{actualDuration}}s, but the fade-through-black transition requires at least {{requiredDuration}}s.',
+          {
+            segmentNumber: err.segmentIndex + 1,
+            actualDuration: formatTransitionSeconds(err.actualDuration),
+            requiredDuration: formatTransitionSeconds(err.requiredDuration),
+          },
+        ));
+      }
+      throw err;
+    }
+
     const finalPaths = intent === 'merge' ? [mergedOutPath] : separateOutPaths;
     if (finalPaths == null || finalPaths.some((path) => path == null) || (intent === 'separate' && finalPaths.length !== exactSegments.length)) {
       throw new Error('Source-preserving export output plan is incomplete');
@@ -1149,6 +1187,35 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
     for (const finalPath of definiteFinalPaths) {
       if (await shouldSkipExistingFile(finalPath)) throw new RefuseOverwriteError();
     }
+
+    const segmentLastFrameOffsets = await pMap(mergeTransitionPlan.segments, async (segment) => {
+      if (segment.fadeOutDuration === 0) return undefined;
+
+      let windowDuration = 2;
+      let reachedSegmentStart = false;
+      while (!reachedSegmentStart) {
+        const { from, to } = buildLastFrameReadWindow({ segment, sourceStartTime, windowDuration });
+        const frames = await readFrames({ filePath, from, to, streamIndex: primaryVideoStream.index });
+        let normalizedFramePts: number[];
+        try {
+          normalizedFramePts = normalizeFramePts({
+            absoluteFramePts: frames.map(({ time }) => time),
+            sourceStartTime,
+          }).filter((pts) => pts >= segment.start && pts < segment.end - 0.000000001);
+          if (normalizedFramePts.length > 0) return getLastFrameOffset({ segment, framePts: normalizedFramePts });
+        } catch (err) {
+          console.error('Unable to resolve fade-through-black last-frame timing', err);
+          throw new UserFacingError(i18n.t('Fade-through-black transition requires reliable source frame timing.'));
+        }
+
+        reachedSegmentStart = from <= sourceStartTime + segment.start + 0.000000001;
+        if (reachedSegmentStart) {
+          throw new UserFacingError(i18n.t('Fade-through-black transition requires reliable source frame timing.'));
+        }
+        windowDuration *= 4;
+      }
+      throw new UserFacingError(i18n.t('Fade-through-black transition requires reliable source frame timing.'));
+    }, { concurrency: 1 });
 
     const stagingDir = await mkdtemp(join(outputDir, '.losslesscut-export-'));
     let preserveStagingForRecovery = false;
@@ -1167,7 +1234,6 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
       if (videoTimebase == null) throw new UserFacingError(i18n.t('Unable to determine the source video time base for precise export.'));
       const videoOnlyStreams: CopyfileStreams = [{ path: filePath, streamIds: [primaryVideoStream.index] }];
       const audioStreams = temporalStreams.filter((stream) => stream.codec_type === 'audio');
-      const sourceEndTime = effectiveFileDuration != null ? sourceStartTime + effectiveFileDuration : undefined;
       const idrSafetyCache = new Map<string, Promise<boolean>>();
       const maxIdrCandidateChecks = 64;
       let idrCandidateCheckCount = 0;
@@ -1183,23 +1249,28 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
         idrSafetyCache.set(cacheKey, pending);
         return pending;
       };
-      const findSafeRandomAccessPoint = async ({ time, mode }: { time: number, mode: 'before' | 'after' }) => {
-        if (sourceEndTime == null) return undefined;
-
+      const findSafeRandomAccessPoint = async ({ time, mode, searchStart, searchEnd }: {
+        time: number,
+        mode: 'before' | 'after',
+        searchStart: number,
+        searchEnd: number,
+      }) => {
         let window = 10;
         const maxSearchWindow = 600;
-        let reachedSourceBoundary = false;
-        while (!reachedSourceBoundary) {
-          const from = mode === 'after' ? time : Math.max(sourceStartTime, time - window);
-          const to = mode === 'after' ? Math.min(sourceEndTime, time + window) : time;
+        let reachedSearchBoundary = false;
+        while (!reachedSearchBoundary) {
+          const from = mode === 'after' ? time : Math.max(searchStart, time - window);
+          const to = mode === 'after' ? Math.min(searchEnd, time + window) : time;
           const frames = await readFrames({
             filePath,
-            from: Math.max(sourceStartTime, from - 0.000001),
-            to: Math.min(sourceEndTime, to + 0.000001),
+            from: Math.max(searchStart, from - 0.000001),
+            to: Math.min(searchEnd, to + 0.000001),
             streamIndex: primaryVideoStream.index,
           });
           const candidates = frames
             .filter(({ keyframe, time: candidateTime }) => keyframe
+              && candidateTime >= searchStart - 0.000001
+              && candidateTime <= searchEnd + 0.000001
               && candidateTime >= from - 0.000001
               && candidateTime <= to + 0.000001
               && (mode === 'after' ? candidateTime >= time - 0.000001 : candidateTime <= time + 0.000001))
@@ -1208,10 +1279,10 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
             if (await isSafeIdrCached(candidate.time)) return candidate.time;
           }
 
-          reachedSourceBoundary = mode === 'after'
-            ? to >= sourceEndTime - 0.000001
-            : from <= sourceStartTime + 0.000001;
-          if (reachedSourceBoundary) return undefined;
+          reachedSearchBoundary = mode === 'after'
+            ? to >= searchEnd - 0.000001
+            : from <= searchStart + 0.000001;
+          if (reachedSearchBoundary) return undefined;
           if (window >= maxSearchWindow) {
             throw new UserFacingError(i18n.t('Precise export stopped because no safe H.264 IDR boundary was found within the search limit.'));
           }
@@ -1219,17 +1290,32 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
         }
         return undefined;
       };
-      const segmentPlans = await pMap(exactSegments, async ({ start, end }) => {
+      const segmentPlans = await pMap(mergeTransitionPlan.segments, async (transitionSegment) => {
+        const { start, end, fadeInDuration, fadeOutDuration } = transitionSegment;
         const sourceTime = (time: number) => sourceStartTime + time;
         const relativeTime = (time: number | undefined) => (time == null ? undefined : time - sourceStartTime);
-        const atSourceStart = Math.abs(start) <= 0.000001;
-        const atSourceEnd = effectiveFileDuration != null && Math.abs(end - effectiveFileDuration) <= 0.000001;
+        const searchPlan = buildTransitionIdrSearchPlan({ segment: transitionSegment, sourceStartTime });
+        if (searchPlan.fullyEncode) {
+          return buildSourcePreservingSegmentPlan({
+            span: { start, end },
+            fadeInDuration,
+            fadeOutDuration,
+            sourceDuration: effectiveFileDuration,
+          });
+        }
+
+        const atSourceStart = fadeInDuration === 0 && Math.abs(start) <= 0.000001;
+        const atSourceEnd = fadeOutDuration === 0
+          && effectiveFileDuration != null
+          && Math.abs(end - effectiveFileDuration) <= 0.000001;
         const [nextKeyframeAbsolute, previousKeyframeAbsolute] = await Promise.all([
-          atSourceStart ? Promise.resolve(sourceTime(start)) : findSafeRandomAccessPoint({ time: sourceTime(start), mode: 'after' }),
-          atSourceEnd ? Promise.resolve(sourceTime(end)) : findSafeRandomAccessPoint({ time: sourceTime(end), mode: 'before' }),
+          atSourceStart ? Promise.resolve(sourceTime(start)) : findSafeRandomAccessPoint({ ...searchPlan.after, mode: 'after' }),
+          atSourceEnd ? Promise.resolve(sourceTime(end)) : findSafeRandomAccessPoint({ ...searchPlan.before, mode: 'before' }),
         ]);
         return buildSourcePreservingSegmentPlan({
           span: { start, end },
+          fadeInDuration,
+          fadeOutDuration,
           nextSafeIdrAtOrAfterCopyStart: relativeTime(nextKeyframeAbsolute),
           previousSafeIdrAtOrBeforeCopyEnd: relativeTime(previousKeyframeAbsolute),
           sourceDuration: effectiveFileDuration,
@@ -1267,6 +1353,8 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
                 onProgress: partProgress,
               });
             } else {
+              const lastFrameOffset = segmentLastFrameOffsets[segmentIndex];
+              if (part.fadeOutDuration != null) invariant(lastFrameOffset != null);
               await cutEncodeSmartPart({
                 cutFrom: part.start,
                 cutTo: part.end,
@@ -1282,6 +1370,11 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
                 ffmpegExperimental,
                 hasBFrames: sourceCodecParams.videoStream.has_b_frames,
                 forceClosedGop: true,
+                ...(part.fadeInDuration != null ? { fadeInDuration: part.fadeInDuration } : {}),
+                ...(part.fadeOutDuration != null ? {
+                  fadeOutDuration: part.fadeOutDuration,
+                  lastFrameOffset,
+                } : {}),
               });
               partProgress(1);
             }
@@ -1403,7 +1496,7 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
         expectedDurations = [expectedDuration];
         expectedVideoDurations = [getSourcePreservingVideoPresentationDuration({ spans: exactSegments, sourceVideoEnd })];
         let elapsed = 0;
-        const mergedVerificationTimes: number[] = [];
+        const mergedVerificationTimes = [...mergeTransitionPlan.joinOutputTimes];
         segmentPlans.forEach((plan, index) => {
           mergedVerificationTimes.push(...plan.parts.slice(0, -1).map(({ end }) => elapsed + end - plan.span.start));
           elapsed += segmentDurations[index]!;

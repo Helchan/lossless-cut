@@ -195,4 +195,8 @@ describe('isMergeTransitionApplicable', () => {
     expect(isMergeTransitionApplicable({ intent: 'merge', enabled: true, segmentCount: 1 })).toBe(false);
     expect(isMergeTransitionApplicable({ intent: 'separate', enabled: true, segmentCount: 2 })).toBe(false);
   });
+
+  it.each([-1, 2.5, Number.NaN, Number.POSITIVE_INFINITY])('rejects invalid segment count %s', (segmentCount) => {
+    expect(isMergeTransitionApplicable({ intent: 'merge', enabled: true, segmentCount })).toBe(false);
+  });
 });

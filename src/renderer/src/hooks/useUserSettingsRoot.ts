@@ -75,6 +75,10 @@ export default function useUserSettingsRoot() {
   useEffect(() => safeSetConfig({ avoidNegativeTs }), [avoidNegativeTs]);
   const [autoMerge, setAutoMerge] = useState(safeGetConfigInitial('autoMerge'));
   useEffect(() => safeSetConfig({ autoMerge }), [autoMerge]);
+  const [mergeTransitionEnabled, setMergeTransitionEnabled] = useState(safeGetConfigInitial('mergeTransitionEnabled'));
+  useEffect(() => safeSetConfig({ mergeTransitionEnabled }), [mergeTransitionEnabled]);
+  const [mergeTransitionDuration, setMergeTransitionDuration] = useState(safeGetConfigInitial('mergeTransitionDuration'));
+  useEffect(() => safeSetConfig({ mergeTransitionDuration }), [mergeTransitionDuration]);
   const [timecodeFormat, setTimecodeFormat] = useState(safeGetConfigInitial('timecodeFormat'));
   useEffect(() => safeSetConfig({ timecodeFormat }), [timecodeFormat]);
   const [autoExportExtraStreams, setAutoExportExtraStreams] = useState(safeGetConfigInitial('autoExportExtraStreams'));
@@ -250,6 +254,8 @@ export default function useUserSettingsRoot() {
     movFastStart,
     avoidNegativeTs,
     autoMerge,
+    mergeTransitionEnabled,
+    mergeTransitionDuration,
     timecodeFormat,
     autoExportExtraStreams,
     askBeforeClose,
@@ -328,6 +334,8 @@ export default function useUserSettingsRoot() {
     setMovFastStart,
     setAvoidNegativeTs,
     setAutoMerge,
+    setMergeTransitionEnabled,
+    setMergeTransitionDuration,
     setTimecodeFormat,
     setAutoExportExtraStreams,
     setAskBeforeClose,

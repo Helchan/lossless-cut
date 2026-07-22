@@ -6,6 +6,7 @@ import assert from 'node:assert';
 import { copyFile } from 'node:fs/promises';
 
 import type { KeyBinding, Config } from '../common/types.js';
+import { defaultMergeTransitionDuration, defaultMergeTransitionEnabled } from '../common/mergeTransition.js';
 import logger from './logger.js';
 import { isWindows, pathExists } from './util.js';
 import { fallbackLng } from './i18nCommon.js';
@@ -103,6 +104,8 @@ const defaults: Config = {
   recentCustomOutDirs: [],
   keyframeCut: true,
   autoMerge: false,
+  mergeTransitionEnabled: defaultMergeTransitionEnabled,
+  mergeTransitionDuration: defaultMergeTransitionDuration,
   autoDeleteMergedSegments: true,
   segmentsToChaptersOnly: false,
   enableSmartCut: false,

@@ -64,7 +64,10 @@ export function isMergeTransitionApplicable({ intent, enabled, segmentCount }: {
   enabled: boolean,
   segmentCount: number,
 }) {
-  return intent === 'merge' && enabled === true && segmentCount >= 2;
+  return Number.isSafeInteger(segmentCount)
+    && segmentCount >= 2
+    && intent === 'merge'
+    && enabled === true;
 }
 
 export function buildMergeTransitionPlan({ intent, enabled, totalDuration, spans }: {

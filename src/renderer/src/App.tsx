@@ -120,6 +120,7 @@ import type { AppEvent } from '../../main/index.js';
 import { appName } from '../../main/common.js';
 import { buildSegmentExportPlan } from './segmentExportPlan';
 import type { SegmentExportIntent, SegmentExportSnapshot } from './segmentExportPlan';
+import { resolveMergeTransitionExportDecision } from './mergeTransitionExport';
 
 interface ExportOptions {
   accurateCut?: boolean,
@@ -190,7 +191,7 @@ function App() {
   const [selectedBatchFiles, setSelectedBatchFiles] = useState<string[]>([]);
 
   const allUserSettings = useUserSettingsRoot();
-  const { captureFormat, keyframeCut, preserveMetadata, preserveMetadataOnMerge, preserveMovData, preserveChapters, movFastStart, avoidNegativeTs, autoMerge, timecodeFormat, autoExportExtraStreams, askBeforeClose, enableImportChapters, enableAskForFileOpenAction, playbackVolume, autoSaveProjectFile, wheelSensitivity, waveformHeight, invertTimelineScroll, language, ffmpegExperimental, hideNotifications, hideOsNotifications, autoLoadTimecode, autoDeleteMergedSegments, segmentsToChapters, cutFileTemplate, cutMergedFileTemplate, mergedFileTemplate, keyboardSeekAccFactor, keyboardNormalSeekSpeed, keyboardSeekSpeed2, keyboardSeekSpeed3, treatInputFileModifiedTimeAsStart, treatOutputFileModifiedTimeAsStart, outFormatLocked, safeOutputFileName, enableAutoHtml5ify, segmentsToChaptersOnly, keyBindings, enableSmartCut, customFfPath, storeProjectInWorkingDir, enableOverwriteOutput, mouseWheelZoomModifierKey, mouseWheelFrameSeekModifierKey, mouseWheelKeyframeSeekModifierKey, captureFrameMethod, captureFrameQuality, captureFrameFileNameFormat, enableNativeHevc, cleanupChoices, darkMode, preferStrongColors, outputFileNameMinZeroPadding, cutFromAdjustmentFrames, cutToAdjustmentFrames, waveformMode: waveformModePreference, thumbnailsEnabled, keyframesEnabled, reducedMotion, ffmpegHwaccel } = allUserSettings.settings;
+  const { captureFormat, keyframeCut, preserveMetadata, preserveMetadataOnMerge, preserveMovData, preserveChapters, movFastStart, avoidNegativeTs, autoMerge, mergeTransitionEnabled, mergeTransitionDuration, timecodeFormat, autoExportExtraStreams, askBeforeClose, enableImportChapters, enableAskForFileOpenAction, playbackVolume, autoSaveProjectFile, wheelSensitivity, waveformHeight, invertTimelineScroll, language, ffmpegExperimental, hideNotifications, hideOsNotifications, autoLoadTimecode, autoDeleteMergedSegments, segmentsToChapters, cutFileTemplate, cutMergedFileTemplate, mergedFileTemplate, keyboardSeekAccFactor, keyboardNormalSeekSpeed, keyboardSeekSpeed2, keyboardSeekSpeed3, treatInputFileModifiedTimeAsStart, treatOutputFileModifiedTimeAsStart, outFormatLocked, safeOutputFileName, enableAutoHtml5ify, segmentsToChaptersOnly, keyBindings, enableSmartCut, customFfPath, storeProjectInWorkingDir, enableOverwriteOutput, mouseWheelZoomModifierKey, mouseWheelFrameSeekModifierKey, mouseWheelKeyframeSeekModifierKey, captureFrameMethod, captureFrameQuality, captureFrameFileNameFormat, enableNativeHevc, cleanupChoices, darkMode, preferStrongColors, outputFileNameMinZeroPadding, cutFromAdjustmentFrames, cutToAdjustmentFrames, waveformMode: waveformModePreference, thumbnailsEnabled, keyframesEnabled, reducedMotion, ffmpegHwaccel } = allUserSettings.settings;
   const { setCaptureFormat, setCustomOutDir, setKeyframeCut, setPlaybackVolume, setOutFormatLocked, setSafeOutputFileName, setKeyBindings, resetKeyBindings, setStoreProjectInWorkingDir, setCleanupChoices, toggleDarkMode, setWaveformMode, setThumbnailsEnabled, setKeyframesEnabled, setAutoMerge, setAutoDeleteMergedSegments, setSegmentsToChaptersOnly, prefersReducedMotion, customOutDir } = allUserSettings;
 
   useEffect(() => {
@@ -1149,10 +1150,24 @@ function App() {
       }
 
       const effectiveAreWeCutting = effectiveSegmentsToExport.some(({ start, end }) => isCuttingStart(start) || isCuttingEnd(end, fileDuration));
-      const shouldUseAccurateCut = effectiveExportOptions.accurateCut === true || effectiveAreWeCutting;
+      const mergeTransitionSnapshot = {
+        enabled: mergeTransitionEnabled,
+        totalDuration: mergeTransitionDuration,
+      };
+      const { transitionApplies, shouldUseAccurateCut } = resolveMergeTransitionExportDecision({
+        intent: effectiveWillMerge ? 'merge' : 'separate',
+        snapshot: mergeTransitionSnapshot,
+        segmentCount: effectiveSegmentsToExport.length,
+        accurateCut: effectiveExportOptions.accurateCut === true,
+        areWeCutting: effectiveAreWeCutting,
+      });
       // Precise timeline exports always retain the detected source container.
       // Ignore legacy/custom output-format locks for this path.
-      if (shouldUseAccurateCut) invariant(detectedFileFormat != null);
+      if (shouldUseAccurateCut && detectedFileFormat == null) {
+        throw new UserFacingError(transitionApplies
+          ? i18n.t('Fade-through-black transition requires a detected source container format.')
+          : i18n.t('Precise export requires a detected source container format.'));
+      }
       const effectiveOutFormat = shouldUseAccurateCut ? detectedFileFormat! : fileFormat;
 
       // Special segments-to-chapters mode:
@@ -1226,6 +1241,7 @@ function App() {
           preserveMetadata,
           preserveMovData,
           movFastStart,
+          mergeTransition: mergeTransitionSnapshot,
           onProgress: setProgress,
         });
         outFiles = effectiveWillMerge ? [] : exactResult.paths.map((path) => ({ path, created: true }));
@@ -1371,7 +1387,7 @@ function App() {
       setWorking(undefined);
       setProgress(undefined);
     }
-  }, [filePath, numStreamsToCopy, haveInvalidSegs, workingRef, setWorking, segmentsToChaptersOnly, cutFileTemplateOrDefault, generateCutFileNames, cutMultiple, exportSourcePreservingSegments, outputDir, customOutDir, fileFormat, detectedFileFormat, fileDuration, isRotationSet, effectiveRotation, copyFileStreams, allFilesMeta, keyframeCut, segmentsToExport, shortestFlag, ffmpegExperimental, preserveMetadata, preserveMetadataOnMerge, preserveMovData, preserveChapters, movFastStart, avoidNegativeTs, paramsByFile, detectedFps, willMerge, mainFileFormat, mainStreams, exportExtraStreams, cleanupChoices, hideAllNotifications, selectedSegmentsToExport, t, cutMergedFileTemplateOrDefault, segmentsToChapters, generateCutMergedFileNames, concatCutSegments, autoDeleteMergedSegments, tryDeleteFiles, nonCopiedExtraStreams, extractStreams, askForCleanupChoices, cleanupFiles, showOsNotification, openCutFinishedDialog, handleExportFailed]);
+  }, [filePath, numStreamsToCopy, haveInvalidSegs, workingRef, setWorking, segmentsToChaptersOnly, cutFileTemplateOrDefault, generateCutFileNames, cutMultiple, exportSourcePreservingSegments, outputDir, customOutDir, fileFormat, detectedFileFormat, fileDuration, isRotationSet, effectiveRotation, copyFileStreams, allFilesMeta, keyframeCut, segmentsToExport, shortestFlag, ffmpegExperimental, preserveMetadata, preserveMetadataOnMerge, preserveMovData, preserveChapters, movFastStart, avoidNegativeTs, paramsByFile, detectedFps, willMerge, mainFileFormat, mainStreams, exportExtraStreams, cleanupChoices, hideAllNotifications, selectedSegmentsToExport, t, cutMergedFileTemplateOrDefault, segmentsToChapters, generateCutMergedFileNames, concatCutSegments, autoDeleteMergedSegments, tryDeleteFiles, nonCopiedExtraStreams, extractStreams, askForCleanupChoices, cleanupFiles, showOsNotification, openCutFinishedDialog, handleExportFailed, mergeTransitionEnabled, mergeTransitionDuration]);
 
   const onExportPress = useCallback(async (exportModeOverride?: ExportMode, segmentsToExportOverride?: SegmentToExport[], exportOptions?: ExportOptions) => {
     if (!filePath) return;

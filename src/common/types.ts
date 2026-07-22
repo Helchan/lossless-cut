@@ -31,6 +31,8 @@ export interface Config {
   recentCustomOutDirs: string[],
   keyframeCut: boolean,
   autoMerge: boolean,
+  mergeTransitionEnabled: boolean,
+  mergeTransitionDuration: number,
   autoDeleteMergedSegments: boolean,
   segmentsToChaptersOnly: boolean,
   enableSmartCut: boolean,
