@@ -85,8 +85,8 @@ export async function snapSourceTimeToFramePtsWithReliability({
     || sourceTime < -legacyBoundaryTolerance || sourceTime > sourceDuration + legacyBoundaryTolerance) {
     throw new Error('Source frame snapping requires finite times within a positive source duration');
   }
-  if (Math.abs(sourceTime) <= legacyBoundaryTolerance
-    || Math.abs(sourceTime - sourceDuration) <= legacyBoundaryTolerance) {
+  if (!requireReliable && (sourceTime === 0
+    || Math.abs(sourceTime - sourceDuration) <= legacyBoundaryTolerance)) {
     return { snappedTime: sourceTime, reliable: true };
   }
 

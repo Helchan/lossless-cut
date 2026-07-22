@@ -210,6 +210,72 @@ describe('reliable boundary snapping', () => {
     expect(windows).toEqual([{ from: 7, to: 9 }]);
   });
 
+  it('requires real timing when a reordered fade-in starts at the source start', async () => {
+    const windows: { from: number, to: number }[] = [];
+    let error: unknown;
+    try {
+      await prepareMergeTransitionExportSegments({
+        intent: 'merge',
+        snapshot: { enabled: true, totalDuration: 0.46 },
+        spans: [{ start: 2, end: 8 }, { start: 0, end: 1 }],
+        sourceStartTime: 0,
+        sourceDuration: 10,
+        readAbsoluteFramePts: async (window) => {
+          windows.push(window);
+          return window.from <= 8 && window.to >= 8 ? [8] : [];
+        },
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(MergeTransitionFrameTimingError);
+    expect(error).toMatchObject({ segmentIndex: 1, boundary: 'start' });
+    expect(windows).toContainEqual({ from: 0, to: 1 });
+  });
+
+  it('requires real timing when a reordered fade-out ends at the source end', async () => {
+    const windows: { from: number, to: number }[] = [];
+    let error: unknown;
+    try {
+      await prepareMergeTransitionExportSegments({
+        intent: 'merge',
+        snapshot: { enabled: true, totalDuration: 0.46 },
+        spans: [{ start: 0, end: 10 }, { start: 2, end: 4 }],
+        sourceStartTime: 3,
+        sourceDuration: 10,
+        readAbsoluteFramePts: async (window) => {
+          windows.push(window);
+          return window.from <= 5 && window.to >= 5 ? [5] : [];
+        },
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(MergeTransitionFrameTimingError);
+    expect(error).toMatchObject({ segmentIndex: 0, boundary: 'end' });
+    expect(windows).toContainEqual({ from: 12, to: 13 });
+  });
+
+  it('keeps legacy snapping for a non-effect start just above zero', async () => {
+    const windows: { from: number, to: number }[] = [];
+    await expect(snapSourceTimeToFramePtsWithReliability({
+      sourceTime: 0.0000005,
+      sourceStartTime: 3,
+      sourceDuration: 12,
+      requireReliable: false,
+      readAbsoluteFramePts: async (window) => {
+        windows.push(window);
+        return [3];
+      },
+    })).resolves.toEqual({ snappedTime: 0, reliable: true });
+
+    expect(windows).toHaveLength(1);
+    expect(windows[0]?.from).toBe(3);
+    expect(windows[0]?.to).toBeCloseTo(4.0000005, 12);
+  });
+
   it('preserves the legacy one-window fallback when a transition does not apply', async () => {
     const windows: { from: number, to: number }[] = [];
     await expect(snapSourceTimeToFramePtsWithReliability({
