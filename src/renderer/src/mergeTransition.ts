@@ -1,5 +1,5 @@
 import { minimumMergeTransitionDuration } from '../../common/mergeTransition.ts';
-import type { SegmentExportIntent } from './segmentExportPlan';
+import type { SegmentExportIntent } from './segmentExportPlan.js';
 
 
 export interface MergeTransitionSpan {

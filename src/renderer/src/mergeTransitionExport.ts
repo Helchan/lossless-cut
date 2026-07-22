@@ -1,4 +1,4 @@
-import type { SegmentExportIntent } from './segmentExportPlan';
+import type { SegmentExportIntent } from './segmentExportPlan.js';
 import {
   buildMergeTransitionPlan,
   isMergeTransitionApplicable,

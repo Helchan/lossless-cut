@@ -11,13 +11,17 @@ import {
   assertSourcePreservingExportMeta,
   buildSourcePreservingConcatManifest,
   buildSourcePreservingSegmentPlan,
+  buildSourcePreservingVideoFilter,
   containsH264IdrAccessUnit,
   getSourcePreservingBoundaryBFrames,
+  getSourcePreservingCopyTargets,
   getSourcePreservingPacketPresentationDuration,
   getSourcePreservingVideoPresentationDuration,
   type SourcePreservingPart,
   type SourcePreservingSpan,
 } from '../src/renderer/src/sourcePreservingExport.ts';
+import { buildMergeTransitionPlan } from '../src/renderer/src/mergeTransition.ts';
+import { getLastFrameOffset } from '../src/renderer/src/mergeTransitionExport.ts';
 
 
 const repoDir = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -147,7 +151,7 @@ async function concatMp4(paths: string[], durations: number[], outputPath: strin
   ], manifest);
 }
 
-async function exportPart({ sourcePath, part, outputPath, videoBitrate, videoProfile, pixelFormat, timescale, sourceBFrames }: {
+async function exportPart({ sourcePath, part, outputPath, videoBitrate, videoProfile, pixelFormat, timescale, sourceBFrames, lastFrameOffset }: {
   sourcePath: string,
   part: SourcePreservingPart,
   outputPath: string,
@@ -156,6 +160,7 @@ async function exportPart({ sourcePath, part, outputPath, videoBitrate, videoPro
   pixelFormat?: string | undefined,
   timescale: number,
   sourceBFrames: number | undefined,
+  lastFrameOffset?: number | undefined,
 }) {
   const duration = part.end - part.start;
   if (part.mode === 'copy') {
@@ -180,13 +185,21 @@ async function exportPart({ sourcePath, part, outputPath, videoBitrate, videoPro
     'High 4:2:2': 'high422',
     'High 4:4:4 Predictive': 'high444',
   } as Record<string, string>)[videoProfile ?? ''];
+  const videoFilter = buildSourcePreservingVideoFilter({
+    duration,
+    ...(part.fadeInDuration != null ? { fadeInDuration: part.fadeInDuration } : {}),
+    ...(part.fadeOutDuration != null ? {
+      fadeOutDuration: part.fadeOutDuration,
+      ...(lastFrameOffset != null ? { lastFrameOffset } : {}),
+    } : {}),
+  });
   await run(ffmpegPath, [
     '-v', 'error',
     '-noautorotate',
     ...(part.start > 0 ? ['-ss', formatNumber(part.start)] : []),
     '-i', sourcePath,
     '-t', formatNumber(duration),
-    '-map', '0:v:0', '-vf', `setpts=PTS-STARTPTS,trim=duration=${formatNumber(duration)},setpts=PTS-STARTPTS`, '-c:v', 'libx264', '-b:v', String(videoBitrate),
+    '-map', '0:v:0', '-vf', videoFilter, '-c:v', 'libx264', '-b:v', String(videoBitrate),
     ...(x264Profile != null ? ['-profile:v', x264Profile] : []),
     ...(pixelFormat != null ? ['-pix_fmt', pixelFormat] : []),
     '-bf', String(getSourcePreservingBoundaryBFrames(sourceBFrames)),
@@ -244,6 +257,305 @@ async function decodedFrameTimes(path: string) {
     const value = parseNumber(best_effort_timestamp_time);
     return value == null ? [] : [value];
   });
+}
+
+async function decodedLuma(path: string) {
+  return runCapture(ffmpegPath, [
+    '-v', 'error', '-i', path,
+    '-map', '0:v:0', '-vf', 'scale=1:1:flags=area,format=gray',
+    '-f', 'rawvideo', '-pix_fmt', 'gray', 'pipe:1',
+  ]);
+}
+
+function packetPresentationCoverage(packets: PacketInfo[], fallbackFrameDuration: number) {
+  const coverage = getSourcePreservingPacketPresentationDuration({
+    packets: packets.flatMap(({ pts_time, duration_time }) => {
+      const time = parseNumber(pts_time);
+      if (time == null) return [];
+      const duration = parseNumber(duration_time);
+      return [{ time, ...(duration != null ? { duration } : {}) }];
+    }),
+    fallbackFrameDuration,
+  });
+  assert(coverage != null);
+  return coverage;
+}
+
+async function runMergeTransitionRegression(workDir: string) {
+  const transitionSourcePath = join(workDir, 'transition-source.mp4');
+  await run(ffmpegPath, [
+    '-v', 'error',
+    '-f', 'lavfi', '-i', 'color=c=gray:s=320x180:r=60:d=8',
+    '-f', 'lavfi', '-i', 'sine=frequency=880:sample_rate=48000:duration=8',
+    '-map', '0:v:0', '-map', '1:a:0',
+    '-c:v', 'libx264', '-preset', 'fast', '-profile:v', 'high', '-pix_fmt', 'yuv420p',
+    '-b:v', '1M', '-minrate', '1M', '-maxrate', '1M', '-bufsize', '2M', '-x264-params', 'nal-hrd=cbr',
+    '-g', '60', '-keyint_min', '60', '-sc_threshold', '0', '-bf', '2',
+    '-c:a', 'aac', '-b:a', '128k', '-ar', '48000',
+    '-video_track_timescale', '60000', '-y', transitionSourcePath,
+  ]);
+
+  const transitionSourceMeta = await probe(transitionSourcePath, true);
+  const transitionSourceVideo = transitionSourceMeta.streams.find(({ codec_type }) => codec_type === 'video');
+  const transitionSourceAudio = transitionSourceMeta.streams.find(({ codec_type }) => codec_type === 'audio');
+  assert(transitionSourceVideo != null && transitionSourceAudio != null);
+  const transitionTimescaleParts = transitionSourceVideo.time_base?.split('/').map(Number);
+  const transitionTimescale = transitionTimescaleParts?.[0] === 1 && Number.isFinite(transitionTimescaleParts[1])
+    ? transitionTimescaleParts[1]!
+    : 60000;
+  const transitionVideoBitrate = Math.floor(Number.parseInt(transitionSourceVideo.bit_rate ?? '1000000', 10) * 1.2);
+  const transitionAudioBitrate = Number.parseInt(transitionSourceAudio.bit_rate ?? '128000', 10);
+  const transitionAudioSampleRate = Number.parseInt(transitionSourceAudio.sample_rate ?? '48000', 10);
+  const transitionSpans: SourcePreservingSpan[] = [{ start: 0.1, end: 3.1 }, { start: 4.9, end: 7.6 }];
+  const transitionExpectedDuration = 5.7;
+  const transitionJoinFrame = 180;
+  const transitionSourcePackets = await readPackets(transitionSourcePath, transitionSourceVideo.index);
+  const transitionKeyframeTimes = transitionSourcePackets.flatMap(({ flags, pts_time }) => {
+    const pts = parseNumber(pts_time);
+    return flags?.startsWith('K') && pts != null ? [pts] : [];
+  });
+  const transitionIdrCache = new Map<number, Promise<boolean>>();
+  const isTransitionSafeIdr = (time: number) => {
+    const existing = transitionIdrCache.get(time);
+    if (existing != null) return existing;
+    const pending = runCapture(ffmpegPath, [
+      '-v', 'error', ...(time > 0 ? ['-ss', formatNumber(time)] : []), '-i', transitionSourcePath,
+      '-map', '0:v:0', '-frames:v', '1', '-c:v', 'copy', '-bsf:v', 'h264_mp4toannexb', '-f', 'h264', 'pipe:1',
+    ]).then((data) => containsH264IdrAccessUnit(data));
+    transitionIdrCache.set(time, pending);
+    return pending;
+  };
+  const findTransitionSafeIdr = async (candidates: number[]) => {
+    for (const candidate of candidates) {
+      if (await isTransitionSafeIdr(candidate)) return candidate;
+    }
+    return undefined;
+  };
+
+  const exportTransitionVideo = async ({ name, fadeEnabled }: { name: string, fadeEnabled: boolean }) => {
+    const transitionPlan = buildMergeTransitionPlan({
+      intent: 'merge',
+      enabled: fadeEnabled,
+      totalDuration: 0.46,
+      spans: transitionSpans,
+    });
+    const sourceDuration = Number.parseFloat(transitionSourceMeta.format.duration);
+    const plans = await Promise.all(transitionPlan.segments.map(async (segment) => {
+      const { copyStart, copyEnd } = getSourcePreservingCopyTargets({
+        span: segment,
+        fadeInDuration: segment.fadeInDuration,
+        fadeOutDuration: segment.fadeOutDuration,
+      });
+      assert(Math.abs(copyStart - segment.copyStartAtOrAfter) <= 1e-9);
+      assert(Math.abs(copyEnd - segment.copyEndAtOrBefore) <= 1e-9);
+      const fullyEncode = copyStart >= copyEnd - 1e-9;
+      const nextSafeIdrAtOrAfterCopyStart = fullyEncode
+        ? undefined
+        : await findTransitionSafeIdr(transitionKeyframeTimes
+          .filter((time) => time >= copyStart - 0.000001 && time <= segment.end + 0.000001));
+      const previousSafeIdrAtOrBeforeCopyEnd = fullyEncode
+        ? undefined
+        : await findTransitionSafeIdr(transitionKeyframeTimes
+          .filter((time) => time >= segment.start - 0.000001 && time <= copyEnd + 0.000001)
+          .toReversed());
+      return buildSourcePreservingSegmentPlan({
+        span: segment,
+        fadeInDuration: segment.fadeInDuration,
+        fadeOutDuration: segment.fadeOutDuration,
+        nextSafeIdrAtOrAfterCopyStart,
+        previousSafeIdrAtOrBeforeCopyEnd,
+        sourceDuration,
+      });
+    }));
+
+    const segmentPaths: string[] = [];
+    for (const [segmentIndex, plan] of plans.entries()) {
+      const transitionSegment = transitionPlan.segments[segmentIndex]!;
+      const lastFrameOffset = transitionSegment.fadeOutDuration > 0
+        ? getLastFrameOffset({
+          segment: transitionSegment,
+          framePts: transitionSourcePackets.flatMap(({ pts_time }) => {
+            const pts = parseNumber(pts_time);
+            return pts != null && pts >= transitionSegment.start && pts < transitionSegment.end - 1e-9 ? [pts] : [];
+          }),
+        })
+        : undefined;
+      const partPaths: string[] = [];
+      for (const [partIndex, part] of plan.parts.entries()) {
+        const partPath = join(workDir, `${name}-segment-${segmentIndex}-part-${partIndex}.mp4`);
+        await exportPart({
+          sourcePath: transitionSourcePath,
+          part,
+          outputPath: partPath,
+          videoBitrate: transitionVideoBitrate,
+          videoProfile: transitionSourceVideo.profile,
+          pixelFormat: transitionSourceVideo.pix_fmt,
+          timescale: transitionTimescale,
+          sourceBFrames: transitionSourceVideo.has_b_frames,
+          ...(lastFrameOffset != null ? { lastFrameOffset } : {}),
+        });
+        partPaths.push(partPath);
+      }
+      const segmentPath = join(workDir, `${name}-segment-${segmentIndex}.mp4`);
+      await concatMp4(partPaths, plan.parts.map(({ start, end }) => end - start), segmentPath, transitionTimescale);
+      segmentPaths.push(segmentPath);
+    }
+    const videoPath = join(workDir, `${name}-video.mp4`);
+    await concatMp4(segmentPaths, transitionSpans.map(({ start, end }) => end - start), videoPath, transitionTimescale);
+    return { videoPath, plans };
+  };
+
+  const fadedVideo = await exportTransitionVideo({ name: 'transition-faded', fadeEnabled: true });
+  const controlVideo = await exportTransitionVideo({ name: 'transition-control', fadeEnabled: false });
+  const transitionAudioPath = join(workDir, 'transition-audio.mp4');
+  await encodeAudioSpans({
+    sourcePath: transitionSourcePath,
+    spans: transitionSpans,
+    outputPath: transitionAudioPath,
+    bitrate: transitionAudioBitrate,
+    sampleRate: transitionAudioSampleRate,
+  });
+  const fadedPath = join(workDir, 'transition-faded.mp4');
+  const controlPath = join(workDir, 'transition-control.mp4');
+  await muxVideoAudio({
+    videoPath: fadedVideo.videoPath,
+    audioPath: transitionAudioPath,
+    outputPath: fadedPath,
+    duration: transitionExpectedDuration,
+    timescale: transitionTimescale,
+  });
+  await muxVideoAudio({
+    videoPath: controlVideo.videoPath,
+    audioPath: transitionAudioPath,
+    outputPath: controlPath,
+    duration: transitionExpectedDuration,
+    timescale: transitionTimescale,
+  });
+
+  const [fadedMeta, controlMeta, fadedLuma, controlLuma] = await Promise.all([
+    probe(fadedPath, true),
+    probe(controlPath, true),
+    decodedLuma(fadedPath),
+    decodedLuma(controlPath),
+  ]);
+  assert.equal(fadedLuma.length, 342);
+  assert.equal(controlLuma.length, 342);
+  assert(Math.abs(Number.parseFloat(fadedMeta.format.duration) - transitionExpectedDuration) <= 1 / 60);
+  assert(Math.abs(Number.parseFloat(controlMeta.format.duration) - transitionExpectedDuration) <= 1 / 60);
+
+  const blackThreshold = 20;
+  assert(fadedLuma[transitionJoinFrame - 1]! <= blackThreshold, 'Fade-out did not make the previous segment final frame black');
+  assert(fadedLuma[transitionJoinFrame]! <= blackThreshold, 'Fade-in did not make the next segment first frame black');
+  const fadeOutChangedIndices = Array.from({ length: transitionJoinFrame }, (_, index) => index)
+    .filter((index) => Math.abs(fadedLuma[index]! - controlLuma[index]!) > 3);
+  const fadeInChangedIndices = Array.from({ length: fadedLuma.length - transitionJoinFrame }, (_, index) => index + transitionJoinFrame)
+    .filter((index) => Math.abs(fadedLuma[index]! - controlLuma[index]!) > 3);
+  assert(fadeOutChangedIndices.length >= 13 && fadeOutChangedIndices.length <= 15);
+  assert(fadeInChangedIndices.length >= 13 && fadeInChangedIndices.length <= 15);
+  for (let index = 1; index < fadeOutChangedIndices.length; index += 1) {
+    assert(fadedLuma[fadeOutChangedIndices[index]!]! <= fadedLuma[fadeOutChangedIndices[index - 1]!]! + 3);
+  }
+  for (let index = 1; index < fadeInChangedIndices.length; index += 1) {
+    assert(fadedLuma[fadeInChangedIndices[index]!]! + 3 >= fadedLuma[fadeInChangedIndices[index - 1]!]!);
+  }
+
+  for (let index = 0; index < transitionJoinFrame - 15; index += 1) {
+    assert(Math.abs(fadedLuma[index]! - controlLuma[index]!) <= 3);
+  }
+  for (let index = transitionJoinFrame + 15; index < fadedLuma.length; index += 1) {
+    assert(Math.abs(fadedLuma[index]! - controlLuma[index]!) <= 3);
+  }
+
+  const fadedVideoStream = fadedMeta.streams.find(({ codec_type }) => codec_type === 'video');
+  const fadedAudioStream = fadedMeta.streams.find(({ codec_type }) => codec_type === 'audio');
+  const controlVideoStream = controlMeta.streams.find(({ codec_type }) => codec_type === 'video');
+  const controlAudioStream = controlMeta.streams.find(({ codec_type }) => codec_type === 'audio');
+  assert(fadedVideoStream != null && fadedAudioStream != null && controlVideoStream != null && controlAudioStream != null);
+  assert.equal(fadedVideoStream.has_b_frames, 2);
+  assert.equal(fadedVideoStream.profile, transitionSourceVideo.profile);
+  assert.equal(fadedVideoStream.pix_fmt, transitionSourceVideo.pix_fmt);
+  assert.equal(fadedVideoStream.time_base, transitionSourceVideo.time_base);
+
+  const [fadedVideoPackets, controlVideoPackets] = await Promise.all([
+    readPackets(fadedPath, fadedVideoStream.index),
+    readPackets(controlPath, controlVideoStream.index),
+  ]);
+  const fadedCoverage = packetPresentationCoverage(fadedVideoPackets, 1 / 60);
+  const controlCoverage = packetPresentationCoverage(controlVideoPackets, 1 / 60);
+  assert(Math.abs(fadedCoverage - transitionExpectedDuration) <= 1 / 60);
+  assert(Math.abs(controlCoverage - transitionExpectedDuration) <= 1 / 60);
+  assert(Math.abs(fadedCoverage - controlCoverage) <= 1 / transitionTimescale);
+
+  const sourceHashedVideoPackets = await readPackets(transitionSourcePath, transitionSourceVideo.index, true);
+  const fadedHashedVideoPackets = await readPackets(fadedPath, fadedVideoStream.index, true);
+  const fadedPacketCounts = packetMultiset(fadedHashedVideoPackets);
+  const copySpans: SourcePreservingSpan[] = [{ start: 1, end: 2 }, { start: 6, end: 7 }];
+  const plannedCopySpans = fadedVideo.plans.flatMap(({ parts }) => parts.filter(({ mode }) => mode === 'copy'));
+  copySpans.forEach((expectedSpan) => {
+    assert(plannedCopySpans.some(({ start, end }) => Math.abs(start - expectedSpan.start) <= 1e-9 && Math.abs(end - expectedSpan.end) <= 1e-9));
+  });
+  const copyPacketPreservationRatios = copySpans.map((copySpan) => {
+    const sourcePackets = packetsInSpans(sourceHashedVideoPackets, [copySpan]);
+    const unmatched = sourcePackets.filter((packet) => !consumePacket(fadedPacketCounts, packet));
+    const ratio = sourcePackets.length === 0 ? 1 : 1 - unmatched.length / sourcePackets.length;
+    assert(ratio >= 0.98, `Only ${(ratio * 100).toFixed(2)}% of ${copySpan.start}-${copySpan.end}s packets were preserved`);
+    return ratio;
+  });
+
+  const [fadedAudioPackets, controlAudioPackets] = await Promise.all([
+    readPackets(fadedPath, fadedAudioStream.index, true),
+    readPackets(controlPath, controlAudioStream.index, true),
+  ]);
+  const audioSignature = (packet: PacketInfo) => ({
+    pts_time: packet.pts_time,
+    duration_time: packet.duration_time,
+    size: packet.size,
+    data_hash: packet.data_hash,
+  });
+  assert.deepEqual(
+    fadedAudioPackets.map((packet) => audioSignature(packet)),
+    controlAudioPackets.map((packet) => audioSignature(packet)),
+  );
+
+  await Promise.all([fadedPath, controlPath].map((path) => run(ffmpegPath, [
+    '-v', 'error', '-xerror', '-ss', '2', '-i', path, '-t', '2', '-map', '0:v:0', '-f', 'null', '-',
+  ])));
+
+  const whiteFramePath = join(workDir, 'transition-white-frame.mp4');
+  await run(ffmpegPath, [
+    '-v', 'error', '-f', 'lavfi', '-i', 'color=c=white:s=16x16:r=60',
+    '-frames:v', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', whiteFramePath,
+  ]);
+  const singleFrameDuration = 1 / 60;
+  const singleFrameFilters = [
+    buildSourcePreservingVideoFilter({ duration: singleFrameDuration, lastFrameOffset: singleFrameDuration, fadeOutDuration: 0.01 }),
+    buildSourcePreservingVideoFilter({ duration: singleFrameDuration, fadeInDuration: 0.01 }),
+    buildSourcePreservingVideoFilter({
+      duration: singleFrameDuration,
+      lastFrameOffset: singleFrameDuration,
+      fadeInDuration: 0.005,
+      fadeOutDuration: 0.005,
+    }),
+  ];
+  for (const [index, filter] of singleFrameFilters.entries()) {
+    const filteredPath = join(workDir, `transition-white-frame-${index}.mp4`);
+    await run(ffmpegPath, [
+      '-v', 'error', '-i', whiteFramePath, '-vf', filter,
+      '-frames:v', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', filteredPath,
+    ]);
+    const luma = await decodedLuma(filteredPath);
+    assert.equal(luma.length, 1);
+    assert(luma[0]! <= blackThreshold, `Single-frame transition branch ${index} did not render black`);
+  }
+
+  return {
+    transitionDuration: transitionExpectedDuration,
+    transitionJoinFrame,
+    fadeOutChangedFrames: fadeOutChangedIndices.length,
+    fadeInChangedFrames: fadeInChangedIndices.length,
+    copyPacketPreservationRatios,
+    audioPacketsIdentical: true,
+  };
 }
 
 await access(ffmpegPath);
@@ -502,6 +814,8 @@ try {
     }
   }
 
+  const transitionRegression = realSourcePath == null ? await runMergeTransitionRegression(workDir) : undefined;
+
   console.log(JSON.stringify({
     expectedDuration,
     sourcePath,
@@ -517,6 +831,7 @@ try {
     sizeRatio,
     exportElapsedSeconds,
     realtimeFactor,
+    transitionRegression,
   }, undefined, 2));
 } finally {
   if (process.env['KEEP_EXACT_EXPORT_TEST_FILES'] === '1') console.log('Kept test files in', workDir);
