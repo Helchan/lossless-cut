@@ -37,6 +37,7 @@ The main feature is lossless trimming and cutting of video and audio files, whic
 - Losslessly cut out parts of video/audio (for cutting away commercials etc.)
 - Losslessly rearrange the order of video/audio segments
 - Lossless merge/concatenation of arbitrary files (with identical codecs parameters, e.g. from the same camera)
+- Configurable fade-through-black transitions at merged cut points
 - Lossless multi track/stream editing
   - Combine arbitrary tracks from multiple files (ex. add music or subtitle track to a video file)
   - Remove unneeded tracks
@@ -128,7 +129,7 @@ LosslessCut is maintained by me alone and will always remain free and open sourc
 
 ## Supported formats
 
-LosslessCut uses the Chromium browser's HTML5 video player, and not all formats/codecs are [natively supported](https://www.chromium.org/audio-video). Generally, the following file formats work: `MP4`, `MOV`, `WebM`, `Matroska`, `OGG` and `WAV`. Audio codecs: `FLAC`, `MP3`, `Opus`, `PCM`, `Vorbis` and `AAC`. Video codecs: `H264`, `AV1`, `Theora`, `VP8`, `VP9` and `H265` (with hardware decoder). Learn the [difference between a codec and a format](docs/index.md#primer-videoaudio-codecs-vs-formats). Codecs and formats not listed above can still be converted to a supported format/codec from the `File` menu (try the option *Fastest: FFmpeg-assisted playback* first). A low quality version of the file will then be created and opened in the player. Note that the actual cut/export operation will still be performed on the original file, so it will be lossless. This allows for potentially opening any file that FFmpeg is able to decode.
+LosslessCut uses the Chromium browser's HTML5 video player, and not all formats/codecs are [natively supported](https://www.chromium.org/audio-video). Generally, the following file formats work: `MP4`, `MOV`, `WebM`, `Matroska`, `OGG` and `WAV`. Audio codecs: `FLAC`, `MP3`, `Opus`, `PCM`, `Vorbis` and `AAC`. Video codecs: `H264`, `AV1`, `Theora`, `VP8`, `VP9` and `H265` (with hardware decoder). Learn the [difference between a codec and a format](docs/index.md#primer-videoaudio-codecs-vs-formats). Codecs and formats not listed above can still be converted to a supported format/codec from the `File` menu (try the option *Fastest: FFmpeg-assisted playback* first). A low quality version of the file will then be created and opened in the player. Note that the actual cut/export operation will still be performed on the original file, so it will be lossless. The fade-through-black option for merged cut points is an exception: it re-encodes only the effect windows and their safe GOP dependency regions, while complete GOPs outside those regions remain copied. This allows for potentially opening any file that FFmpeg is able to decode.
 
 ## Documentation
 

@@ -1165,8 +1165,8 @@ function App() {
       // Ignore legacy/custom output-format locks for this path.
       if (shouldUseAccurateCut && detectedFileFormat == null) {
         throw new UserFacingError(transitionApplies
-          ? i18n.t('Fade-through-black transition requires a detected source container format.')
-          : i18n.t('Precise export requires a detected source container format.'));
+          ? i18n.t('Unable to determine the source container required for precise fade-through-black export.')
+          : i18n.t('Unable to determine the source container required for precise export.'));
       }
       const effectiveOutFormat = shouldUseAccurateCut ? detectedFileFormat! : fileFormat;
 

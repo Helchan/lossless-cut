@@ -1165,7 +1165,7 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
       if (err.code === 'segment-too-short') {
         invariant(err.segmentIndex != null && err.actualDuration != null && err.requiredDuration != null);
         throw new UserFacingError(i18n.t(
-          'Segment {{segmentNumber}} is {{actualDuration}}s, but the fade-through-black transition requires at least {{requiredDuration}}s.',
+          'Segment {{segmentNumber}} is {{actualDuration}}s long, but the fade-through-black transition requires at least {{requiredDuration}}s.',
           {
             segmentNumber: err.segmentIndex + 1,
             actualDuration: formatTransitionSeconds(err.actualDuration),

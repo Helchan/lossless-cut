@@ -23,8 +23,10 @@ Please read the documentation before creating an issue. Thank you 🙏
 
 ## Commonly requested features
 
-- **Q:** Can LosslessCut **crop, resize, stretch, mirror/flip, reverse, overlay text/images, watermark, blur, redact, reduce quality/re-encode, create GIF, slideshow, burn subtitles, color grading, fade/transition between video clips, fade/combine/mix/merge audio tracks, mute audio channels or change audio volume**?
+- **Q:** Can LosslessCut **crop, resize, stretch, mirror/flip, reverse, overlay text/images, watermark, blur, redact, reduce quality/re-encode, create GIF, slideshow, burn subtitles, color grading, fade/combine/mix/merge audio tracks, mute audio channels or change audio volume**?
   - **A:** No, these are all lossy operations (meaning you *have* to re-encode the file), but in the future I may start to implement such features. [See #372](https://github.com/mifi/lossless-cut/issues/372). Related: [#643](https://github.com/mifi/lossless-cut/issues/643).
+- **Q:** Can LosslessCut add a video transition between merged segments?
+  - **A:** It supports a fade through black at cut points when merging multiple segments from the same H.264 source in an MP4/MOV-family container. The effect and safe GOP dependency regions are re-encoded; other complete GOPs remain copied.
 - **Q:** When will you implement feature X?
   - **A:** I have limited time and I have a lot of projects to work on, so I cannot promise any timeline. I will usually prioritize the issues with the most likes, [see here for a list of the most popular issues](https://github.com/mifi/lossless-cut/issues/691).
 - **Q:** Can LosslessCut do the same batch conversion operation on multiple files?
@@ -62,7 +64,7 @@ If you have a problem with the app or with a file, please see the [🤔 Troubles
   - Note that when exporting, all segments you create will be **preserved** and exported as new files. You can change this behavior with the **Yin Yang** symbol ☯️, in which case the behaviour is inverted and LosslessCut will instead **skip** all selected segments and export the parts **between** segments as files.
   - Also note that start times will not be accurate, see [Known issues](troubleshooting.md).
 - *(optional)* <kbd>+</kbd> to add another segment at the current cursor time. Then select the segment end time with <kbd>O</kbd>.
-- *(optional)* If you want to merge all the selected segments into one file after cutting, change the `Export mode` from `Separate files` to `Merge cuts`.
+- *(optional)* If you want to merge all the selected segments into one file after cutting, change the `Export mode` from `Separate files` to `Merge cuts`. The toolbar's `Fade through black at cut points` checkbox is enabled by default with a `0.46s` total transition duration. This value covers the complete fade to black and fade back to normal brightness. The effect does not change audio or the merged output duration.
 - *(optional)* If you want to export to a certain output folder, press the `Working dir unset` button (defaults to same folder as source file).
 - *(optional)* If you want to change orientation, press the **rotation** button.
 - *(optional)* By default, most audio, video and subtitle tracks from the input file will be cut and exported. Press the `Tracks` button to customise and/or add new tracks from other files.

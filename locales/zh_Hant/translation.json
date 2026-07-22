@@ -1032,5 +1032,14 @@
   "Unable to build export plan.": "無法建立匯出計畫。",
   "{{count}} non-audio/video track(s) were not included in exact timeline export.": "精準時間軸匯出未包含 {{count}} 條非音訊／視訊軌道。",
   "{{count}} cut point(s) were aligned to the nearest actual source frame.": "已將 {{count}} 個剪切點對齊至最近的實際來源視訊影格。",
-  "{{count}} segment(s) had no safely reusable complete GOP and were encoded to keep every selected frame.": "有 {{count}} 個片段不包含可安全重用的完整 GOP，為保留每個選中影格已對這些片段進行編碼。"
+  "{{count}} segment(s) had no safely reusable complete GOP and were encoded to keep every selected frame.": "有 {{count}} 個片段不包含可安全重用的完整 GOP，為保留每個選中影格已對這些片段進行編碼。",
+  "Fade through black at cut points": "剪切點淡黑過渡",
+  "Transition duration": "過渡總時長",
+  "Fade-through-black transition duration must be a finite number of at least {{minimumDuration}}s.": "淡黑過渡總時長必須是至少 {{minimumDuration}}s 的有限數值。",
+  "Fade-through-black transition requires reliable source frame timing.": "淡黑過渡需要可靠的來源視訊影格時間資訊。",
+  "Unable to determine the source container required for precise fade-through-black export.": "無法識別精準淡黑過渡匯出所需的來源容器。",
+  "Unable to determine the source container required for precise export.": "無法識別精準匯出所需的來源容器。",
+  "Segment {{segmentNumber}} is {{actualDuration}}s long, but the fade-through-black transition requires at least {{requiredDuration}}s.": "第 {{segmentNumber}} 個片段時長為 {{actualDuration}}s，淡黑過渡至少需要 {{requiredDuration}}s。",
+  "Precise export produced no video track.": "精準匯出結果中沒有視訊軌道。",
+  "Unable to determine the source video duration for precise export.": "無法確定精準匯出所需的來源視訊時長。"
 }

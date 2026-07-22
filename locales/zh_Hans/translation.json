@@ -1119,5 +1119,14 @@
   "Unable to build export plan.": "无法构建导出计划。",
   "{{count}} non-audio/video track(s) were not included in exact timeline export.": "精准时间轴导出未包含 {{count}} 条非音视频轨道。",
   "{{count}} cut point(s) were aligned to the nearest actual source frame.": "已将 {{count}} 个剪切点对齐到最近的实际源视频帧。",
-  "{{count}} segment(s) had no safely reusable complete GOP and were encoded to keep every selected frame.": "有 {{count}} 个片段不包含可安全复用的完整 GOP，为保留每个选中帧已对这些片段进行编码。"
+  "{{count}} segment(s) had no safely reusable complete GOP and were encoded to keep every selected frame.": "有 {{count}} 个片段不包含可安全复用的完整 GOP，为保留每个选中帧已对这些片段进行编码。",
+  "Fade through black at cut points": "剪切点淡黑过渡",
+  "Transition duration": "过渡总时长",
+  "Fade-through-black transition duration must be a finite number of at least {{minimumDuration}}s.": "淡黑过渡总时长必须是至少 {{minimumDuration}}s 的有限数值。",
+  "Fade-through-black transition requires reliable source frame timing.": "淡黑过渡需要可靠的源视频帧时间信息。",
+  "Unable to determine the source container required for precise fade-through-black export.": "无法识别精确淡黑过渡导出所需的源容器。",
+  "Unable to determine the source container required for precise export.": "无法识别精确导出所需的源容器。",
+  "Segment {{segmentNumber}} is {{actualDuration}}s long, but the fade-through-black transition requires at least {{requiredDuration}}s.": "第 {{segmentNumber}} 个片段时长为 {{actualDuration}}s，淡黑过渡至少需要 {{requiredDuration}}s。",
+  "Precise export produced no video track.": "精准导出结果中没有视频轨道。",
+  "Unable to determine the source video duration for precise export.": "无法确定精准导出所需的源视频时长。"
 }

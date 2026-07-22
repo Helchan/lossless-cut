@@ -54,6 +54,14 @@ This can happen when trying to merge files that are not compatible. Make sure th
 
 Doing this first might "clean up" certain parameters in the files, to make them more compatible for merging. If this doesn't work, you can also try to change `avoid_negative_ts` (in export options). Also try to disable most tracks (see above). If this doesn't resolve the issue, then it probably means that you're hitting a bug or limitation in FFmpeg with the particular file that you're cutting/merging. Unfortunately there's not much to do other than trying different output settings, different cut time or waiting for improvements in FFmpeg.
 
+### Fade through black at merged cut points
+
+The toolbar checkbox enables a fade through black when exporting multiple timeline segments with `Merge cuts`. It is enabled by default with a `0.46s` total duration; unchecking it restores the original merge behavior. Audio and the merged output duration do not change.
+
+This transition currently requires one real H.264 video track from a single source, an MP4/MOV-family source container, and no external tracks. Only the effect windows and safe GOP dependency regions are re-encoded; complete GOPs outside those regions remain copied.
+
+The total transition duration must be a finite number of at least `0.000002s`. For a total duration `T`, the first and last segments must each be at least `T/2` long, while every middle segment must be at least `T` long. These rules are checked after cut points are aligned to real source frames. The whole export is rejected before output starts if a segment is too short or reliable frame PTS cannot be determined; the duration is never silently shortened.
+
 ## Smart cut not working
 
 Smart cut is experimental, so don't expect too much. But if you're having problems, check out [this issue](https://github.com/mifi/lossless-cut/issues/126).
