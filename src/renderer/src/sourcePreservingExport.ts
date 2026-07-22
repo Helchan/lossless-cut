@@ -62,6 +62,10 @@ function isSameTime(a: number, b: number) {
   return Math.abs(a - b) <= boundaryTolerance;
 }
 
+function isSameEffectTime(a: number, b: number) {
+  return Math.abs(a - b) <= effectDurationTolerance;
+}
+
 function durationOf({ start, end }: SourcePreservingSpan) {
   return end - start;
 }
@@ -199,6 +203,8 @@ export function buildSourcePreservingSegmentPlan({
 
   const copyStart = startsAtSafePoint ? start : nextSafeIdrAtOrAfterCopyStart;
   const copyEnd = endsAtSafePoint ? end : previousSafeIdrAtOrBeforeCopyEnd;
+  const effectApplied = fadeInDuration > 0 || fadeOutDuration > 0;
+  const planTolerance = effectApplied ? effectDurationTolerance : boundaryTolerance;
   const fadeProperties = {
     ...(fadeInDuration > 0 ? { fadeInDuration } : {}),
     ...(fadeOutDuration > 0 ? { fadeOutDuration } : {}),
@@ -210,14 +216,14 @@ export function buildSourcePreservingSegmentPlan({
     || copyEnd <= copyStart + boundaryTolerance
     ? [{ mode: 'encode', start, end, ...fadeProperties }]
     : [
-      ...(!isSameTime(start, copyStart) ? [{
+      ...(!(fadeInDuration > 0 ? isSameEffectTime(start, copyStart) : isSameTime(start, copyStart)) ? [{
         mode: 'encode' as const,
         start,
         end: copyStart,
         ...(fadeInDuration > 0 ? { fadeInDuration } : {}),
       }] : []),
       { mode: 'copy' as const, start: copyStart, end: copyEnd },
-      ...(!isSameTime(copyEnd, end) ? [{
+      ...(!(fadeOutDuration > 0 ? isSameEffectTime(copyEnd, end) : isSameTime(copyEnd, end)) ? [{
         mode: 'encode' as const,
         start: copyEnd,
         end,
@@ -227,11 +233,15 @@ export function buildSourcePreservingSegmentPlan({
 
   const firstPart = parts[0];
   const lastPart = parts.at(-1);
-  if (firstPart == null || lastPart == null || !isSameTime(firstPart.start, start) || !isSameTime(lastPart.end, end)) {
+  if (firstPart == null || lastPart == null
+    || Math.abs(firstPart.start - start) > planTolerance
+    || Math.abs(lastPart.end - end) > planTolerance) {
     throw new Error('Source-preserving export plan does not cover the requested span');
   }
   parts.slice(1).forEach((part, index) => {
-    if (!isSameTime(parts[index]!.end, part.start)) throw new Error('Source-preserving export plan contains a gap or overlap');
+    if (Math.abs(parts[index]!.end - part.start) > planTolerance) {
+      throw new Error('Source-preserving export plan contains a gap or overlap');
+    }
   });
 
   const copiedDuration = parts.filter(({ mode }) => mode === 'copy').reduce((total, part) => total + durationOf(part), 0);

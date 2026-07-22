@@ -93,6 +93,41 @@ describe('buildSourcePreservingSegmentPlan', () => {
     ]);
   });
 
+  test('preserves exact one-microsecond fade edges at the minimum legal transition duration', () => {
+    expect(buildSourcePreservingSegmentPlan({
+      span: { start: 0, end: 1 },
+      fadeInDuration: 0.000001,
+      nextSafeIdrAtOrAfterCopyStart: 0.000001,
+      sourceDuration: 1,
+    }).parts).toEqual([
+      { mode: 'encode', start: 0, end: 0.000001, fadeInDuration: 0.000001 },
+      { mode: 'copy', start: 0.000001, end: 1 },
+    ]);
+
+    expect(buildSourcePreservingSegmentPlan({
+      span: { start: 0, end: 1 },
+      fadeOutDuration: 0.000001,
+      previousSafeIdrAtOrBeforeCopyEnd: 0.999999,
+      sourceDuration: 1,
+    }).parts).toEqual([
+      { mode: 'copy', start: 0, end: 0.999999 },
+      { mode: 'encode', start: 0.999999, end: 1, fadeOutDuration: 0.000001 },
+    ]);
+
+    expect(buildSourcePreservingSegmentPlan({
+      span: { start: 0, end: 1 },
+      fadeInDuration: 0.000001,
+      fadeOutDuration: 0.000001,
+      nextSafeIdrAtOrAfterCopyStart: 0.000001,
+      previousSafeIdrAtOrBeforeCopyEnd: 0.999999,
+      sourceDuration: 1,
+    }).parts).toEqual([
+      { mode: 'encode', start: 0, end: 0.000001, fadeInDuration: 0.000001 },
+      { mode: 'copy', start: 0.000001, end: 0.999999 },
+      { mode: 'encode', start: 0.999999, end: 1, fadeOutDuration: 0.000001 },
+    ]);
+  });
+
   test('encodes one continuous part when the fade copy targets touch', () => {
     const plan = buildSourcePreservingSegmentPlan({
       span: { start: 4, end: 4.46 },

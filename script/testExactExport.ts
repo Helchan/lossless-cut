@@ -14,14 +14,18 @@ import {
   buildSourcePreservingVideoFilter,
   containsH264IdrAccessUnit,
   getSourcePreservingBoundaryBFrames,
-  getSourcePreservingCopyTargets,
   getSourcePreservingPacketPresentationDuration,
   getSourcePreservingVideoPresentationDuration,
   type SourcePreservingPart,
   type SourcePreservingSpan,
 } from '../src/renderer/src/sourcePreservingExport.ts';
-import { buildMergeTransitionPlan } from '../src/renderer/src/mergeTransition.ts';
-import { getLastFrameOffset } from '../src/renderer/src/mergeTransitionExport.ts';
+import {
+  buildTransitionIdrSearchPlan,
+  getLastFrameOffset,
+  isSourcePreservingIdrCandidateTime,
+  prepareMergeTransitionExportSegments,
+  resolveMergeTransitionExportDecision,
+} from '../src/renderer/src/mergeTransitionExport.ts';
 
 
 const repoDir = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -309,7 +313,13 @@ async function runMergeTransitionRegression(workDir: string) {
   const transitionSpans: SourcePreservingSpan[] = [{ start: 0.1, end: 3.1 }, { start: 4.9, end: 7.6 }];
   const transitionExpectedDuration = 5.7;
   const transitionJoinFrame = 180;
+  const transitionSourceStartTime = Number.parseFloat(transitionSourceMeta.format.start_time ?? '0');
+  const transitionSourceDuration = Number.parseFloat(transitionSourceMeta.format.duration);
   const transitionSourcePackets = await readPackets(transitionSourcePath, transitionSourceVideo.index);
+  const transitionFramePts = transitionSourcePackets.flatMap(({ pts_time }) => {
+    const pts = parseNumber(pts_time);
+    return pts == null ? [] : [pts];
+  });
   const transitionKeyframeTimes = transitionSourcePackets.flatMap(({ flags, pts_time }) => {
     const pts = parseNumber(pts_time);
     return flags?.startsWith('K') && pts != null ? [pts] : [];
@@ -332,39 +342,84 @@ async function runMergeTransitionRegression(workDir: string) {
     return undefined;
   };
 
+  const prepareTransitionRoute = async ({
+    intent,
+    enabled,
+    spans,
+    accurateCut,
+  }: {
+    intent: 'merge' | 'separate',
+    enabled: boolean,
+    spans: readonly SourcePreservingSpan[],
+    accurateCut: boolean,
+  }) => {
+    const snapshot = { enabled, totalDuration: 0.46 };
+    const decision = resolveMergeTransitionExportDecision({
+      intent,
+      snapshot,
+      segmentCount: spans.length,
+      accurateCut,
+      areWeCutting: false,
+    });
+    assert.equal(decision.shouldUseAccurateCut, true);
+    const prepared = await prepareMergeTransitionExportSegments({
+      intent,
+      snapshot,
+      spans,
+      sourceStartTime: transitionSourceStartTime,
+      sourceDuration: transitionSourceDuration,
+      readAbsoluteFramePts: async ({ from, to }) => transitionFramePts
+        .filter((pts) => pts >= from - 1e-9 && pts <= to + 1e-9),
+    });
+    assert.equal(prepared.plan.applied, decision.transitionApplies);
+    return { decision, prepared };
+  };
+
   const exportTransitionVideo = async ({ name, fadeEnabled }: { name: string, fadeEnabled: boolean }) => {
-    const transitionPlan = buildMergeTransitionPlan({
+    const { prepared } = await prepareTransitionRoute({
       intent: 'merge',
       enabled: fadeEnabled,
-      totalDuration: 0.46,
       spans: transitionSpans,
+      accurateCut: !fadeEnabled,
     });
-    const sourceDuration = Number.parseFloat(transitionSourceMeta.format.duration);
+    const transitionPlan = prepared.plan;
+    assert(Math.abs(transitionPlan.expectedDuration - transitionExpectedDuration) <= 1e-9);
     const plans = await Promise.all(transitionPlan.segments.map(async (segment) => {
-      const { copyStart, copyEnd } = getSourcePreservingCopyTargets({
-        span: segment,
-        fadeInDuration: segment.fadeInDuration,
-        fadeOutDuration: segment.fadeOutDuration,
-      });
-      assert(Math.abs(copyStart - segment.copyStartAtOrAfter) <= 1e-9);
-      assert(Math.abs(copyEnd - segment.copyEndAtOrBefore) <= 1e-9);
-      const fullyEncode = copyStart >= copyEnd - 1e-9;
-      const nextSafeIdrAtOrAfterCopyStart = fullyEncode
+      const searchPlan = buildTransitionIdrSearchPlan({ segment, sourceStartTime: transitionSourceStartTime });
+      const nextSafeIdrAtOrAfterCopyStartAbsolute = searchPlan.fullyEncode
         ? undefined
         : await findTransitionSafeIdr(transitionKeyframeTimes
-          .filter((time) => time >= copyStart - 0.000001 && time <= segment.end + 0.000001));
-      const previousSafeIdrAtOrBeforeCopyEnd = fullyEncode
+          .filter((time) => time >= searchPlan.after.searchStart - 0.000001
+            && time <= searchPlan.after.searchEnd + 0.000001
+            && isSourcePreservingIdrCandidateTime({
+              candidateTime: time,
+              targetTime: searchPlan.after.time,
+              mode: 'after',
+              effectDuration: segment.fadeInDuration,
+            })));
+      const previousSafeIdrAtOrBeforeCopyEndAbsolute = searchPlan.fullyEncode
         ? undefined
         : await findTransitionSafeIdr(transitionKeyframeTimes
-          .filter((time) => time >= segment.start - 0.000001 && time <= copyEnd + 0.000001)
+          .filter((time) => time >= searchPlan.before.searchStart - 0.000001
+            && time <= searchPlan.before.searchEnd + 0.000001
+            && isSourcePreservingIdrCandidateTime({
+              candidateTime: time,
+              targetTime: searchPlan.before.time,
+              mode: 'before',
+              effectDuration: segment.fadeOutDuration,
+            }))
           .toReversed());
       return buildSourcePreservingSegmentPlan({
         span: segment,
         fadeInDuration: segment.fadeInDuration,
         fadeOutDuration: segment.fadeOutDuration,
-        nextSafeIdrAtOrAfterCopyStart,
-        previousSafeIdrAtOrBeforeCopyEnd,
-        sourceDuration,
+        nextSafeIdrAtOrAfterCopyStart: nextSafeIdrAtOrAfterCopyStartAbsolute == null
+          ? undefined
+          : nextSafeIdrAtOrAfterCopyStartAbsolute - transitionSourceStartTime,
+        previousSafeIdrAtOrBeforeCopyEnd: previousSafeIdrAtOrBeforeCopyEndAbsolute == null
+          ? undefined
+          : previousSafeIdrAtOrBeforeCopyEndAbsolute - transitionSourceStartTime,
+        sourceDuration: transitionSourceDuration,
       });
     }));
 
@@ -401,32 +456,63 @@ async function runMergeTransitionRegression(workDir: string) {
       segmentPaths.push(segmentPath);
     }
     const videoPath = join(workDir, `${name}-video.mp4`);
-    await concatMp4(segmentPaths, transitionSpans.map(({ start, end }) => end - start), videoPath, transitionTimescale);
-    return { videoPath, plans };
+    await concatMp4(segmentPaths, prepared.snappedSpans.map(({ start, end }) => end - start), videoPath, transitionTimescale);
+    return {
+      videoPath,
+      plans,
+      snappedSpans: prepared.snappedSpans,
+      transitionApplied: transitionPlan.applied,
+    };
   };
 
   const fadedVideo = await exportTransitionVideo({ name: 'transition-faded', fadeEnabled: true });
   const controlVideo = await exportTransitionVideo({ name: 'transition-control', fadeEnabled: false });
-  const transitionAudioPath = join(workDir, 'transition-audio.mp4');
-  await encodeAudioSpans({
-    sourcePath: transitionSourcePath,
-    spans: transitionSpans,
-    outputPath: transitionAudioPath,
-    bitrate: transitionAudioBitrate,
-    sampleRate: transitionAudioSampleRate,
+  assert.equal(fadedVideo.transitionApplied, true);
+  assert.equal(controlVideo.transitionApplied, false);
+  const singleMergeRoute = await prepareTransitionRoute({
+    intent: 'merge',
+    enabled: true,
+    spans: [transitionSpans[0]!],
+    accurateCut: true,
   });
+  const separateRoute = await prepareTransitionRoute({
+    intent: 'separate',
+    enabled: true,
+    spans: transitionSpans,
+    accurateCut: true,
+  });
+  assert.equal(singleMergeRoute.prepared.plan.applied, false);
+  assert.equal(separateRoute.prepared.plan.applied, false);
+  const fadedAudioPath = join(workDir, 'transition-faded-audio.mp4');
+  const controlAudioPath = join(workDir, 'transition-control-audio.mp4');
+  await Promise.all([
+    encodeAudioSpans({
+      sourcePath: transitionSourcePath,
+      spans: fadedVideo.snappedSpans,
+      outputPath: fadedAudioPath,
+      bitrate: transitionAudioBitrate,
+      sampleRate: transitionAudioSampleRate,
+    }),
+    encodeAudioSpans({
+      sourcePath: transitionSourcePath,
+      spans: controlVideo.snappedSpans,
+      outputPath: controlAudioPath,
+      bitrate: transitionAudioBitrate,
+      sampleRate: transitionAudioSampleRate,
+    }),
+  ]);
   const fadedPath = join(workDir, 'transition-faded.mp4');
   const controlPath = join(workDir, 'transition-control.mp4');
   await muxVideoAudio({
     videoPath: fadedVideo.videoPath,
-    audioPath: transitionAudioPath,
+    audioPath: fadedAudioPath,
     outputPath: fadedPath,
     duration: transitionExpectedDuration,
     timescale: transitionTimescale,
   });
   await muxVideoAudio({
     videoPath: controlVideo.videoPath,
-    audioPath: transitionAudioPath,
+    audioPath: controlAudioPath,
     outputPath: controlPath,
     duration: transitionExpectedDuration,
     timescale: transitionTimescale,
@@ -550,11 +636,18 @@ async function runMergeTransitionRegression(workDir: string) {
 
   return {
     transitionDuration: transitionExpectedDuration,
+    frameCount: fadedLuma.length,
     transitionJoinFrame,
     fadeOutChangedFrames: fadeOutChangedIndices.length,
     fadeInChangedFrames: fadeInChangedIndices.length,
     copyPacketPreservationRatios,
     audioPacketsIdentical: true,
+    routeTransitionApplied: {
+      enabledMerge: fadedVideo.transitionApplied,
+      disabledMerge: controlVideo.transitionApplied,
+      singleMerge: singleMergeRoute.prepared.plan.applied,
+      separate: separateRoute.prepared.plan.applied,
+    },
   };
 }
 

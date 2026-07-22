@@ -6,8 +6,12 @@ import {
   buildSnappedMergeTransitionPreflight,
   buildTransitionIdrSearchPlan,
   getLastFrameOffset,
+  isSourcePreservingIdrCandidateTime,
+  MergeTransitionFrameTimingError,
   normalizeFramePts,
+  prepareMergeTransitionExportSegments,
   resolveMergeTransitionExportDecision,
+  snapSourceTimeToFramePtsWithReliability,
 } from './mergeTransitionExport';
 
 
@@ -114,6 +118,184 @@ describe('buildTransitionIdrSearchPlan', () => {
         copyEndAtOrBefore: 2.23,
       },
     })).toEqual({ fullyEncode: true });
+  });
+
+  it('does not accept a wrong-side IDR through the legacy one-microsecond tolerance', () => {
+    expect(isSourcePreservingIdrCandidateTime({
+      candidateTime: 0,
+      targetTime: 0.000001,
+      mode: 'after',
+      effectDuration: 0.000001,
+    })).toBe(false);
+    expect(isSourcePreservingIdrCandidateTime({
+      candidateTime: 0.000001,
+      targetTime: 0.000001,
+      mode: 'after',
+      effectDuration: 0.000001,
+    })).toBe(true);
+    expect(isSourcePreservingIdrCandidateTime({
+      candidateTime: 0.0000009995,
+      targetTime: 0.000001,
+      mode: 'after',
+      effectDuration: 0.000001,
+    })).toBe(true);
+    expect(isSourcePreservingIdrCandidateTime({
+      candidateTime: 0.999999,
+      targetTime: 0.999999,
+      mode: 'before',
+      effectDuration: 0.000001,
+    })).toBe(true);
+    expect(isSourcePreservingIdrCandidateTime({
+      candidateTime: 1,
+      targetTime: 0.999999,
+      mode: 'before',
+      effectDuration: 0.000001,
+    })).toBe(false);
+    expect(isSourcePreservingIdrCandidateTime({
+      candidateTime: 0.9999990005,
+      targetTime: 0.999999,
+      mode: 'before',
+      effectDuration: 0.000001,
+    })).toBe(true);
+  });
+
+  it('retains the legacy candidate tolerance when no effect touches that edge', () => {
+    expect(isSourcePreservingIdrCandidateTime({
+      candidateTime: 0.9999995,
+      targetTime: 1,
+      mode: 'after',
+      effectDuration: 0,
+    })).toBe(true);
+    expect(isSourcePreservingIdrCandidateTime({
+      candidateTime: 1.0000005,
+      targetTime: 1,
+      mode: 'before',
+      effectDuration: 0,
+    })).toBe(true);
+  });
+});
+
+describe('reliable boundary snapping', () => {
+  it('marks a boundary reliable only when it finds a real source frame timestamp', async () => {
+    const windows: { from: number, to: number }[] = [];
+    const result = await snapSourceTimeToFramePtsWithReliability({
+      sourceTime: 5,
+      sourceStartTime: 3,
+      sourceDuration: 12,
+      requireReliable: true,
+      readAbsoluteFramePts: async (window) => {
+        windows.push(window);
+        return [7.91, 8.04];
+      },
+    });
+
+    expect(windows).toEqual([{ from: 7, to: 9 }]);
+    expect(result.reliable).toBe(true);
+    expect(result.snappedTime).toBeCloseTo(5.04, 12);
+  });
+
+  it('rejects an applied transition without moving the boundary to a distant frame', async () => {
+    const windows: { from: number, to: number }[] = [];
+    await expect(snapSourceTimeToFramePtsWithReliability({
+      sourceTime: 5,
+      sourceStartTime: 3,
+      sourceDuration: 12,
+      requireReliable: true,
+      readAbsoluteFramePts: async (window) => {
+        windows.push(window);
+        return [];
+      },
+    })).rejects.toBeInstanceOf(MergeTransitionFrameTimingError);
+
+    expect(windows).toEqual([{ from: 7, to: 9 }]);
+  });
+
+  it('preserves the legacy one-window fallback when a transition does not apply', async () => {
+    const windows: { from: number, to: number }[] = [];
+    await expect(snapSourceTimeToFramePtsWithReliability({
+      sourceTime: 5,
+      sourceStartTime: 3,
+      sourceDuration: 12,
+      requireReliable: false,
+      readAbsoluteFramePts: async (window) => {
+        windows.push(window);
+        return [];
+      },
+    })).resolves.toEqual({ snappedTime: 5, reliable: false });
+
+    expect(windows).toEqual([{ from: 7, to: 9 }]);
+  });
+
+  it('prepares applied transition spans from real frame timestamps', async () => {
+    const absoluteFramePts = [0.1, 3.1, 4.9, 7.6];
+    const prepared = await prepareMergeTransitionExportSegments({
+      intent: 'merge',
+      snapshot: { enabled: true, totalDuration: 0.46 },
+      spans: [{ start: 0.11, end: 3.09 }, { start: 4.91, end: 7.59 }],
+      sourceStartTime: 0,
+      sourceDuration: 8,
+      readAbsoluteFramePts: async ({ from, to }) => absoluteFramePts.filter((pts) => pts >= from && pts <= to),
+    });
+
+    expect(prepared.snappedSpans).toEqual([{ start: 0.1, end: 3.1 }, { start: 4.9, end: 7.6 }]);
+    expect(prepared.snappedCutPointCount).toBe(4);
+    expect(prepared.plan.applied).toBe(true);
+  });
+
+  it.each([
+    { missingPts: 3.1, segmentIndex: 0, boundary: 'end' as const },
+    { missingPts: 4.9, segmentIndex: 1, boundary: 'start' as const },
+  ])('rejects an unreliable $boundary effect boundary before export planning', async ({ missingPts, segmentIndex, boundary }) => {
+    const absoluteFramePts = [0.1, 3.1, 4.9, 7.6].filter((pts) => pts !== missingPts);
+    let error: unknown;
+    try {
+      await prepareMergeTransitionExportSegments({
+        intent: 'merge',
+        snapshot: { enabled: true, totalDuration: 0.46 },
+        spans: [{ start: 0.1, end: 3.1 }, { start: 4.9, end: 7.6 }],
+        sourceStartTime: 0,
+        sourceDuration: 8,
+        readAbsoluteFramePts: async ({ from, to }) => absoluteFramePts.filter((pts) => pts >= from && pts <= to),
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(MergeTransitionFrameTimingError);
+    expect(error).toMatchObject({ segmentIndex, boundary });
+  });
+
+  it('does not require timing for the first start or final end because no effect touches them', async () => {
+    const absoluteFramePts = [3.1, 4.9];
+    const prepared = await prepareMergeTransitionExportSegments({
+      intent: 'merge',
+      snapshot: { enabled: true, totalDuration: 0.46 },
+      spans: [{ start: 0.1, end: 3.1 }, { start: 4.9, end: 7.6 }],
+      sourceStartTime: 0,
+      sourceDuration: 8,
+      readAbsoluteFramePts: async ({ from, to }) => absoluteFramePts.filter((pts) => pts >= from && pts <= to),
+    });
+
+    expect(prepared.snappedSpans).toEqual([{ start: 0.1, end: 3.1 }, { start: 4.9, end: 7.6 }]);
+    expect(prepared.plan.applied).toBe(true);
+  });
+
+  it.each([
+    { intent: 'merge' as const, enabled: false, spans: [{ start: 0.1, end: 3.1 }, { start: 4.9, end: 7.6 }] },
+    { intent: 'merge' as const, enabled: true, spans: [{ start: 0.1, end: 3.1 }] },
+    { intent: 'separate' as const, enabled: true, spans: [{ start: 0.1, end: 3.1 }, { start: 4.9, end: 7.6 }] },
+  ])('preserves fallback timing for a non-applicable $intent route', async ({ intent, enabled, spans }) => {
+    const prepared = await prepareMergeTransitionExportSegments({
+      intent,
+      snapshot: { enabled, totalDuration: Number.NaN },
+      spans,
+      sourceStartTime: 0,
+      sourceDuration: 8,
+      readAbsoluteFramePts: async () => [],
+    });
+
+    expect(prepared.snappedSpans).toEqual(spans);
+    expect(prepared.plan.applied).toBe(false);
   });
 });
 

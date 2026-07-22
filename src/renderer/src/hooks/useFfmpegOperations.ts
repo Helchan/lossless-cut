@@ -17,11 +17,10 @@ import { UserFacingError } from '../../errors';
 import mainApi from '../mainApi';
 import { formatFfmpegNumber, getHwaccelArgs } from '../../../common/util';
 import type { SegmentExportIntent } from '../segmentExportPlan';
-import { snapSourceTimeToFramePts } from '../timelineSegments';
 import { assertSourcePreservingExportMeta, buildSourcePreservingConcatManifest, buildSourcePreservingSegmentPlan, buildSourcePreservingVideoFilter, containsH264IdrAccessUnit, getSourcePreservingBoundaryBFrames, getSourcePreservingPacketPresentationDuration, getSourcePreservingVideoPresentationDuration, SourcePreservingVerificationError } from '../sourcePreservingExport';
 import { createMonotonicProgressReporter, mapProgressRange, sourcePreservingProgressPhases } from '../sourcePreservingProgress';
 import { MergeTransitionPlanError } from '../mergeTransition';
-import { buildLastFrameReadWindow, buildSnappedMergeTransitionPreflight, buildTransitionIdrSearchPlan, getLastFrameOffset, normalizeFramePts, type MergeTransitionSnapshot } from '../mergeTransitionExport';
+import { buildLastFrameReadWindow, buildTransitionIdrSearchPlan, getLastFrameOffset, isSourcePreservingIdrCandidateTime, MergeTransitionFrameTimingError, normalizeFramePts, prepareMergeTransitionExportSegments, SnappedSourceSegmentError, type MergeTransitionSnapshot } from '../mergeTransitionExport';
 import { minimumMergeTransitionDuration } from '../../../common/mergeTransition';
 
 const { join, resolve, dirname } = window.require('node:path');
@@ -1126,35 +1125,28 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
       ? (Number.isFinite(parsedVideoStartTime) ? parsedVideoStartTime : sourceStartTime) + parsedVideoDuration - sourceStartTime
       : effectiveFileDuration;
     if (sourceVideoEnd == null) throw new UserFacingError(i18n.t('Unable to determine the source video duration for precise export.'));
-    let snappedCutPointCount = 0;
-
-    const snapBoundary = async (time: number) => {
-      if (time === 0 || (effectiveFileDuration != null && Math.abs(time - effectiveFileDuration) <= 0.000001)) return time;
-      const frames = await readFrames({
-        filePath,
-        from: sourceStartTime + Math.max(time - 1, 0),
-        to: sourceStartTime + (effectiveFileDuration != null ? Math.min(time + 1, effectiveFileDuration) : time + 1),
-        streamIndex: primaryVideoStream.index,
-      });
-      const snapped = snapSourceTimeToFramePts(time, frames.map(({ time: frameTime }) => frameTime - sourceStartTime));
-      if (Math.abs(snapped - time) > 0.000001) snappedCutPointCount += 1;
-      return snapped;
-    };
-
-    const exactSegments = await pMap(segments, async (segment) => {
-      const [start, end] = await Promise.all([snapBoundary(segment.start), snapBoundary(segment.end)]);
-      if (end <= start) throw new UserFacingError(i18n.t('A selected segment is shorter than one source frame.'));
-      return { ...segment, start, end };
-    }, { concurrency: 1 });
-
-    let mergeTransitionPlan;
+    let preparedSegments;
     try {
-      mergeTransitionPlan = buildSnappedMergeTransitionPreflight({
+      preparedSegments = await prepareMergeTransitionExportSegments({
         intent,
         snapshot: mergeTransition,
-        spans: exactSegments,
+        spans: segments,
+        sourceStartTime,
+        sourceDuration: effectiveFileDuration ?? sourceVideoEnd,
+        readAbsoluteFramePts: async ({ from, to }) => (await readFrames({
+          filePath,
+          from,
+          to,
+          streamIndex: primaryVideoStream.index,
+        })).map(({ time }) => time),
       });
     } catch (err) {
+      if (err instanceof MergeTransitionFrameTimingError) {
+        throw new UserFacingError(i18n.t('Fade-through-black transition requires reliable source frame timing.'));
+      }
+      if (err instanceof SnappedSourceSegmentError) {
+        throw new UserFacingError(i18n.t('A selected segment is shorter than one source frame.'));
+      }
       if (!(err instanceof MergeTransitionPlanError)) throw err;
       if (err.code === 'invalid-duration') {
         throw new UserFacingError(i18n.t(
@@ -1175,6 +1167,8 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
       }
       throw err;
     }
+    const exactSegments = segments.map((segment, index) => ({ ...segment, ...preparedSegments.snappedSpans[index]! }));
+    const { plan: mergeTransitionPlan, snappedCutPointCount } = preparedSegments;
 
     const finalPaths = intent === 'merge' ? [mergedOutPath] : separateOutPaths;
     if (finalPaths == null || finalPaths.some((path) => path == null) || (intent === 'separate' && finalPaths.length !== exactSegments.length)) {
@@ -1249,11 +1243,12 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
         idrSafetyCache.set(cacheKey, pending);
         return pending;
       };
-      const findSafeRandomAccessPoint = async ({ time, mode, searchStart, searchEnd }: {
+      const findSafeRandomAccessPoint = async ({ time, mode, searchStart, searchEnd, effectDuration }: {
         time: number,
         mode: 'before' | 'after',
         searchStart: number,
         searchEnd: number,
+        effectDuration: number,
       }) => {
         let window = 10;
         const maxSearchWindow = 600;
@@ -1273,7 +1268,12 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
               && candidateTime <= searchEnd + 0.000001
               && candidateTime >= from - 0.000001
               && candidateTime <= to + 0.000001
-              && (mode === 'after' ? candidateTime >= time - 0.000001 : candidateTime <= time + 0.000001))
+              && isSourcePreservingIdrCandidateTime({
+                candidateTime,
+                targetTime: time,
+                mode,
+                effectDuration,
+              }))
             .sort((a, b) => (mode === 'after' ? a.time - b.time : b.time - a.time));
           for (const candidate of candidates) {
             if (await isSafeIdrCached(candidate.time)) return candidate.time;
@@ -1309,8 +1309,16 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
           && effectiveFileDuration != null
           && Math.abs(end - effectiveFileDuration) <= 0.000001;
         const [nextKeyframeAbsolute, previousKeyframeAbsolute] = await Promise.all([
-          atSourceStart ? Promise.resolve(sourceTime(start)) : findSafeRandomAccessPoint({ ...searchPlan.after, mode: 'after' }),
-          atSourceEnd ? Promise.resolve(sourceTime(end)) : findSafeRandomAccessPoint({ ...searchPlan.before, mode: 'before' }),
+          atSourceStart ? Promise.resolve(sourceTime(start)) : findSafeRandomAccessPoint({
+            ...searchPlan.after,
+            mode: 'after',
+            effectDuration: fadeInDuration,
+          }),
+          atSourceEnd ? Promise.resolve(sourceTime(end)) : findSafeRandomAccessPoint({
+            ...searchPlan.before,
+            mode: 'before',
+            effectDuration: fadeOutDuration,
+          }),
         ]);
         return buildSourcePreservingSegmentPlan({
           span: { start, end },
