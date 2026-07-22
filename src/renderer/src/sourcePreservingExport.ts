@@ -3,9 +3,18 @@ export interface SourcePreservingSpan {
   end: number,
 }
 
-export interface SourcePreservingPart extends SourcePreservingSpan {
-  mode: 'copy' | 'encode',
+export interface SourcePreservingFadeDurations {
+  fadeInDuration?: number | undefined,
+  fadeOutDuration?: number | undefined,
 }
+
+export type SourcePreservingPart =
+  | (SourcePreservingSpan & { mode: 'copy' })
+  | (SourcePreservingSpan & {
+    mode: 'encode',
+    fadeInDuration?: number | undefined,
+    fadeOutDuration?: number | undefined,
+  });
 
 export interface SourcePreservingSegmentPlan {
   span: SourcePreservingSpan,
@@ -14,14 +23,16 @@ export interface SourcePreservingSegmentPlan {
   reencodedDuration: number,
 }
 
-export interface BuildSourcePreservingSegmentPlanOptions {
+export interface BuildSourcePreservingSegmentPlanOptions extends SourcePreservingFadeDurations {
   span: SourcePreservingSpan,
-  nextKeyframeAtOrAfterStart?: number | undefined,
-  previousKeyframeAtOrBeforeEnd?: number | undefined,
+  nextSafeIdrAtOrAfterCopyStart?: number | undefined,
+  previousSafeIdrAtOrBeforeCopyEnd?: number | undefined,
   sourceDuration?: number | undefined,
 }
 
 const boundaryTolerance = 0.000001;
+const effectDurationTolerance = 0.000000001;
+const minimumFilterDuration = 0.000001;
 
 /**
  * Returns true only when an Annex-B H.264 access unit contains an IDR slice.
@@ -53,6 +64,39 @@ function isSameTime(a: number, b: number) {
 
 function durationOf({ start, end }: SourcePreservingSpan) {
   return end - start;
+}
+
+function validateSourcePreservingSpan({ start, end }: SourcePreservingSpan) {
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start) {
+    throw new Error('Source-preserving export requires a finite half-open interval with 0 <= start < end');
+  }
+}
+
+function validateFadeDuration(name: string, duration: number) {
+  if (!Number.isFinite(duration) || duration < 0) {
+    throw new Error(`${name} must be finite and non-negative`);
+  }
+}
+
+export function getSourcePreservingCopyTargets({
+  span,
+  fadeInDuration = 0,
+  fadeOutDuration = 0,
+}: {
+  span: SourcePreservingSpan,
+} & SourcePreservingFadeDurations) {
+  validateSourcePreservingSpan(span);
+  validateFadeDuration('Fade-in duration', fadeInDuration);
+  validateFadeDuration('Fade-out duration', fadeOutDuration);
+
+  if (fadeInDuration + fadeOutDuration > durationOf(span) + effectDurationTolerance) {
+    throw new Error('Fade durations must not exceed the source-preserving segment duration');
+  }
+
+  return {
+    copyStart: span.start + fadeInDuration,
+    copyEnd: span.end - fadeOutDuration,
+  };
 }
 
 /**
@@ -119,29 +163,66 @@ export function getSourcePreservingPacketPresentationDuration({
  */
 export function buildSourcePreservingSegmentPlan({
   span,
-  nextKeyframeAtOrAfterStart,
-  previousKeyframeAtOrBeforeEnd,
+  fadeInDuration = 0,
+  fadeOutDuration = 0,
+  nextSafeIdrAtOrAfterCopyStart,
+  previousSafeIdrAtOrBeforeCopyEnd,
   sourceDuration,
 }: BuildSourcePreservingSegmentPlanOptions): SourcePreservingSegmentPlan {
   const { start, end } = span;
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start) {
-    throw new Error('Source-preserving export requires a finite half-open interval with 0 <= start < end');
+  const { copyStart: copyStartTarget, copyEnd: copyEndTarget } = getSourcePreservingCopyTargets({
+    span,
+    fadeInDuration,
+    fadeOutDuration,
+  });
+  if (nextSafeIdrAtOrAfterCopyStart != null && !Number.isFinite(nextSafeIdrAtOrAfterCopyStart)) {
+    throw new Error('The safe IDR at or after the copy start must be finite');
+  }
+  if (previousSafeIdrAtOrBeforeCopyEnd != null && !Number.isFinite(previousSafeIdrAtOrBeforeCopyEnd)) {
+    throw new Error('The safe IDR at or before the copy end must be finite');
+  }
+  if (fadeInDuration > 0
+    && nextSafeIdrAtOrAfterCopyStart != null
+    && nextSafeIdrAtOrAfterCopyStart < copyStartTarget - effectDurationTolerance) {
+    throw new Error('The safe IDR copy start intrudes into the fade-in window');
+  }
+  if (fadeOutDuration > 0
+    && previousSafeIdrAtOrBeforeCopyEnd != null
+    && previousSafeIdrAtOrBeforeCopyEnd > copyEndTarget + effectDurationTolerance) {
+    throw new Error('The safe IDR copy end intrudes into the fade-out window');
   }
 
-  const startsAtSafePoint = start === 0
-    || (nextKeyframeAtOrAfterStart != null && isSameTime(nextKeyframeAtOrAfterStart, start));
-  const endsAtSafePoint = (sourceDuration != null && isSameTime(end, sourceDuration))
-    || (previousKeyframeAtOrBeforeEnd != null && isSameTime(previousKeyframeAtOrBeforeEnd, end));
+  const startsAtSafePoint = fadeInDuration === 0 && (start === 0
+    || (nextSafeIdrAtOrAfterCopyStart != null && isSameTime(nextSafeIdrAtOrAfterCopyStart, start)));
+  const endsAtSafePoint = fadeOutDuration === 0 && ((sourceDuration != null && isSameTime(end, sourceDuration))
+    || (previousSafeIdrAtOrBeforeCopyEnd != null && isSameTime(previousSafeIdrAtOrBeforeCopyEnd, end)));
 
-  const copyStart = startsAtSafePoint ? start : nextKeyframeAtOrAfterStart;
-  const copyEnd = endsAtSafePoint ? end : previousKeyframeAtOrBeforeEnd;
+  const copyStart = startsAtSafePoint ? start : nextSafeIdrAtOrAfterCopyStart;
+  const copyEnd = endsAtSafePoint ? end : previousSafeIdrAtOrBeforeCopyEnd;
+  const fadeProperties = {
+    ...(fadeInDuration > 0 ? { fadeInDuration } : {}),
+    ...(fadeOutDuration > 0 ? { fadeOutDuration } : {}),
+  };
 
-  const parts: SourcePreservingPart[] = copyStart == null || copyEnd == null || copyEnd <= copyStart + boundaryTolerance
-    ? [{ mode: 'encode', start, end }]
+  const parts: SourcePreservingPart[] = copyStartTarget >= copyEndTarget - effectDurationTolerance
+    || copyStart == null
+    || copyEnd == null
+    || copyEnd <= copyStart + boundaryTolerance
+    ? [{ mode: 'encode', start, end, ...fadeProperties }]
     : [
-      ...(!isSameTime(start, copyStart) ? [{ mode: 'encode' as const, start, end: copyStart }] : []),
+      ...(!isSameTime(start, copyStart) ? [{
+        mode: 'encode' as const,
+        start,
+        end: copyStart,
+        ...(fadeInDuration > 0 ? { fadeInDuration } : {}),
+      }] : []),
       { mode: 'copy' as const, start: copyStart, end: copyEnd },
-      ...(!isSameTime(copyEnd, end) ? [{ mode: 'encode' as const, start: copyEnd, end }] : []),
+      ...(!isSameTime(copyEnd, end) ? [{
+        mode: 'encode' as const,
+        start: copyEnd,
+        end,
+        ...(fadeOutDuration > 0 ? { fadeOutDuration } : {}),
+      }] : []),
     ];
 
   const firstPart = parts[0];
@@ -157,6 +238,58 @@ export function buildSourcePreservingSegmentPlan({
   const reencodedDuration = parts.filter(({ mode }) => mode === 'encode').reduce((total, part) => total + durationOf(part), 0);
 
   return { span, parts, copiedDuration, reencodedDuration };
+}
+
+function formatFilterNumber(value: number) {
+  if (!Number.isFinite(value)) throw new Error('Video filter values must be finite');
+  return value.toFixed(6);
+}
+
+export function buildSourcePreservingVideoFilter({
+  duration,
+  lastFrameOffset,
+  fadeInDuration = 0,
+  fadeOutDuration = 0,
+}: {
+  duration: number,
+  lastFrameOffset?: number | undefined,
+} & SourcePreservingFadeDurations) {
+  if (!Number.isFinite(duration) || duration <= 0) throw new Error('Video filter duration must be positive and finite');
+  validateFadeDuration('Fade-in duration', fadeInDuration);
+  validateFadeDuration('Fade-out duration', fadeOutDuration);
+  if (fadeInDuration > duration + effectDurationTolerance || fadeOutDuration > duration + effectDurationTolerance) {
+    throw new Error('Fade duration must not exceed the encoded part duration');
+  }
+  if ((fadeInDuration > 0 && fadeInDuration < minimumFilterDuration)
+    || (fadeOutDuration > 0 && fadeOutDuration < minimumFilterDuration)) {
+    throw new Error('Positive fade duration must be at least one microsecond');
+  }
+
+  const filters = [
+    `setpts=PTS-STARTPTS,trim=duration=${formatFilterNumber(duration)},setpts=PTS-STARTPTS`,
+  ];
+  if (fadeInDuration > 0) {
+    filters.push(`fade=t=in:st=0:d=${formatFilterNumber(fadeInDuration)}:c=black`);
+  }
+  if (fadeOutDuration > 0) {
+    if (lastFrameOffset == null
+      || !Number.isFinite(lastFrameOffset)
+      || lastFrameOffset <= 0
+      || lastFrameOffset > duration) {
+      throw new Error('Fade-out requires a positive finite last frame offset within the encoded part');
+    }
+
+    const lastFrameTime = duration - lastFrameOffset;
+    if (lastFrameTime <= boundaryTolerance) {
+      filters.push(`fade=t=in:st=${formatFilterNumber(duration)}:d=${formatFilterNumber(fadeOutDuration)}:c=black`);
+    } else {
+      const idealFadeOutStart = duration - fadeOutDuration - lastFrameOffset;
+      const fadeOutStart = Math.max(idealFadeOutStart, 0);
+      const effectiveFadeOutDuration = idealFadeOutStart >= 0 ? fadeOutDuration : lastFrameTime;
+      filters.push(`fade=t=out:st=${formatFilterNumber(fadeOutStart)}:d=${formatFilterNumber(effectiveFadeOutDuration)}:c=black`);
+    }
+  }
+  return filters.join(',');
 }
 
 function formatDuration(value: number) {

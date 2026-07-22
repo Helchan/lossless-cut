@@ -3,8 +3,10 @@ import { describe, expect, test } from 'vitest';
 import {
   buildSourcePreservingConcatManifest,
   buildSourcePreservingSegmentPlan,
+  buildSourcePreservingVideoFilter,
   containsH264IdrAccessUnit,
   getSourcePreservingBoundaryBFrames,
+  getSourcePreservingCopyTargets,
   getSourcePreservingPacketPresentationDuration,
   getSourcePreservingVideoPresentationDuration,
   verifySourcePreservingExportMeta,
@@ -30,8 +32,8 @@ describe('buildSourcePreservingSegmentPlan', () => {
   test('copies complete GOPs and encodes only both dependency edges', () => {
     const plan = buildSourcePreservingSegmentPlan({
       span: { start: 3.1, end: 18.4 },
-      nextKeyframeAtOrAfterStart: 4,
-      previousKeyframeAtOrBeforeEnd: 18,
+      nextSafeIdrAtOrAfterCopyStart: 4,
+      previousSafeIdrAtOrBeforeCopyEnd: 18,
       sourceDuration: 60,
     });
 
@@ -47,8 +49,8 @@ describe('buildSourcePreservingSegmentPlan', () => {
   test('copies a segment whose boundaries are safe random-access points', () => {
     const plan = buildSourcePreservingSegmentPlan({
       span: { start: 4, end: 18 },
-      nextKeyframeAtOrAfterStart: 4,
-      previousKeyframeAtOrBeforeEnd: 18,
+      nextSafeIdrAtOrAfterCopyStart: 4,
+      previousSafeIdrAtOrBeforeCopyEnd: 18,
       sourceDuration: 60,
     });
     expect(plan.parts).toEqual([{ mode: 'copy', start: 4, end: 18 }]);
@@ -58,8 +60,8 @@ describe('buildSourcePreservingSegmentPlan', () => {
   test('encodes only the selected short segment when boundary GOPs overlap', () => {
     const plan = buildSourcePreservingSegmentPlan({
       span: { start: 3.1, end: 3.7 },
-      nextKeyframeAtOrAfterStart: 4,
-      previousKeyframeAtOrBeforeEnd: 2,
+      nextSafeIdrAtOrAfterCopyStart: 4,
+      previousSafeIdrAtOrBeforeCopyEnd: 2,
       sourceDuration: 60,
     });
     expect(plan.parts).toEqual([{ mode: 'encode', start: 3.1, end: 3.7 }]);
@@ -72,6 +74,139 @@ describe('buildSourcePreservingSegmentPlan', () => {
       sourceDuration: 60,
     });
     expect(plan.parts).toEqual([{ mode: 'copy', start: 0, end: 60 }]);
+  });
+
+  test('encodes source edges that contain fade effects instead of treating them as copy-safe', () => {
+    const plan = buildSourcePreservingSegmentPlan({
+      span: { start: 0, end: 10 },
+      fadeInDuration: 0.23,
+      fadeOutDuration: 0.23,
+      nextSafeIdrAtOrAfterCopyStart: 2,
+      previousSafeIdrAtOrBeforeCopyEnd: 8,
+      sourceDuration: 10,
+    });
+
+    expect(plan.parts).toEqual([
+      { mode: 'encode', start: 0, end: 2, fadeInDuration: 0.23 },
+      { mode: 'copy', start: 2, end: 8 },
+      { mode: 'encode', start: 8, end: 10, fadeOutDuration: 0.23 },
+    ]);
+  });
+
+  test('encodes one continuous part when the fade copy targets touch', () => {
+    const plan = buildSourcePreservingSegmentPlan({
+      span: { start: 4, end: 4.46 },
+      fadeInDuration: 0.23,
+      fadeOutDuration: 0.23,
+      sourceDuration: 60,
+    });
+
+    expect(plan.parts).toEqual([{
+      mode: 'encode',
+      start: 4,
+      end: 4.46,
+      fadeInDuration: 0.23,
+      fadeOutDuration: 0.23,
+    }]);
+  });
+
+  test('rejects safe boundaries that intrude into a fade effect window', () => {
+    expect(() => buildSourcePreservingSegmentPlan({
+      span: { start: 4, end: 18 },
+      fadeInDuration: 0.23,
+      fadeOutDuration: 0.23,
+      nextSafeIdrAtOrAfterCopyStart: 4.2,
+      previousSafeIdrAtOrBeforeCopyEnd: 16,
+    })).toThrow(/copy start/i);
+
+    expect(() => buildSourcePreservingSegmentPlan({
+      span: { start: 4, end: 18 },
+      fadeInDuration: 0.23,
+      fadeOutDuration: 0.23,
+      nextSafeIdrAtOrAfterCopyStart: 6,
+      previousSafeIdrAtOrBeforeCopyEnd: 17.8,
+    })).toThrow(/copy end/i);
+  });
+
+  test('rejects invalid fade durations', () => {
+    expect(() => getSourcePreservingCopyTargets({ span: { start: 1, end: 2 }, fadeInDuration: -0.1 })).toThrow();
+    expect(() => getSourcePreservingCopyTargets({ span: { start: 1, end: 2 }, fadeOutDuration: Number.NaN })).toThrow();
+    expect(() => getSourcePreservingCopyTargets({
+      span: { start: 1, end: 2 },
+      fadeInDuration: 0.6,
+      fadeOutDuration: 0.5,
+    })).toThrow();
+  });
+});
+
+describe('buildSourcePreservingVideoFilter', () => {
+  const base = 'setpts=PTS-STARTPTS,trim=duration=2.000000,setpts=PTS-STARTPTS';
+
+  test('keeps the legacy filter byte-for-byte when no fade is requested', () => {
+    expect(buildSourcePreservingVideoFilter({ duration: 2 })).toBe(base);
+  });
+
+  test('uses the real last-frame offset so a 60 fps final frame reaches black', () => {
+    expect(buildSourcePreservingVideoFilter({
+      duration: 2,
+      lastFrameOffset: 1 / 60,
+      fadeInDuration: 0.23,
+      fadeOutDuration: 0.23,
+    })).toBe([
+      base,
+      'fade=t=in:st=0:d=0.230000:c=black',
+      'fade=t=out:st=1.753333:d=0.230000:c=black',
+    ].join(','));
+  });
+
+  test('uses an irregular VFR last-frame offset instead of average FPS', () => {
+    expect(buildSourcePreservingVideoFilter({
+      duration: 2,
+      lastFrameOffset: 0.04,
+      fadeOutDuration: 0.23,
+    })).toContain('fade=t=out:st=1.730000:d=0.230000:c=black');
+  });
+
+  test.each([undefined, 0, Number.NaN, Number.POSITIVE_INFINITY, 3])('rejects invalid fade-out last-frame offset %s', (lastFrameOffset) => {
+    expect(() => buildSourcePreservingVideoFilter({
+      duration: 2,
+      ...(lastFrameOffset != null ? { lastFrameOffset } : {}),
+      fadeOutDuration: 0.23,
+    })).toThrow(/last frame offset/i);
+  });
+
+  test('uses an explicit black sampling filter for a fade-out-only single frame', () => {
+    expect(buildSourcePreservingVideoFilter({
+      duration: 1 / 60,
+      lastFrameOffset: 1 / 60,
+      fadeOutDuration: 0.01,
+    })).toBe([
+      'setpts=PTS-STARTPTS,trim=duration=0.016667,setpts=PTS-STARTPTS',
+      'fade=t=in:st=0.016667:d=0.010000:c=black',
+    ].join(','));
+  });
+
+  test('starts a fade-in-only single frame at black', () => {
+    expect(buildSourcePreservingVideoFilter({
+      duration: 1 / 60,
+      fadeInDuration: 0.01,
+    })).toBe([
+      'setpts=PTS-STARTPTS,trim=duration=0.016667,setpts=PTS-STARTPTS',
+      'fade=t=in:st=0:d=0.010000:c=black',
+    ].join(','));
+  });
+
+  test('keeps a single frame black when both effects are present', () => {
+    expect(buildSourcePreservingVideoFilter({
+      duration: 1 / 60,
+      lastFrameOffset: 1 / 60,
+      fadeInDuration: 0.005,
+      fadeOutDuration: 0.005,
+    })).toBe([
+      'setpts=PTS-STARTPTS,trim=duration=0.016667,setpts=PTS-STARTPTS',
+      'fade=t=in:st=0:d=0.005000:c=black',
+      'fade=t=in:st=0.016667:d=0.005000:c=black',
+    ].join(','));
   });
 });
 

@@ -312,10 +312,10 @@ try {
   };
   const plans = await Promise.all(spans.map(async (span) => buildSourcePreservingSegmentPlan({
     span,
-    nextKeyframeAtOrAfterStart: span.start === 0
+    nextSafeIdrAtOrAfterCopyStart: span.start === 0
       ? 0
       : await findSafeIdr(keyframeTimes.filter((time) => time >= span.start - 0.000001)),
-    previousKeyframeAtOrBeforeEnd: Math.abs(span.end - sourceDuration) <= 0.000001
+    previousSafeIdrAtOrBeforeCopyEnd: Math.abs(span.end - sourceDuration) <= 0.000001
       ? sourceDuration
       : await findSafeIdr(keyframeTimes.filter((time) => time <= span.end + 0.000001).toReversed()),
     sourceDuration,

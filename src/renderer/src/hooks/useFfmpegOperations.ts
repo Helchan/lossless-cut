@@ -18,7 +18,7 @@ import mainApi from '../mainApi';
 import { formatFfmpegNumber, getHwaccelArgs } from '../../../common/util';
 import type { SegmentExportIntent } from '../segmentExportPlan';
 import { snapSourceTimeToFramePts } from '../timelineSegments';
-import { assertSourcePreservingExportMeta, buildSourcePreservingConcatManifest, buildSourcePreservingSegmentPlan, containsH264IdrAccessUnit, getSourcePreservingBoundaryBFrames, getSourcePreservingPacketPresentationDuration, getSourcePreservingVideoPresentationDuration, SourcePreservingVerificationError } from '../sourcePreservingExport';
+import { assertSourcePreservingExportMeta, buildSourcePreservingConcatManifest, buildSourcePreservingSegmentPlan, buildSourcePreservingVideoFilter, containsH264IdrAccessUnit, getSourcePreservingBoundaryBFrames, getSourcePreservingPacketPresentationDuration, getSourcePreservingVideoPresentationDuration, SourcePreservingVerificationError } from '../sourcePreservingExport';
 import { createMonotonicProgressReporter, mapProgressRange, sourcePreservingProgressPhases } from '../sourcePreservingProgress';
 
 const { join, resolve, dirname } = window.require('node:path');
@@ -488,7 +488,7 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
   }, [appendFfmpegCommandLog, cutFromAdjustmentFrames, cutToAdjustmentFrames, filePath, getOutputPlaybackRateArgs, treatInputFileModifiedTimeAsStart, treatOutputFileModifiedTimeAsStart]);
 
   // inspired by https://gist.github.com/fernandoherreradelasheras/5eca67f4200f1a7cc8281747da08496e
-  const cutEncodeSmartPart = useCallback(async ({ cutFrom, cutTo, outPath, outFormat, videoCodec, videoBitrate, videoTimebase, allFilesMeta, copyFileStreams, videoStreamIndex, sourceVideoStream, ffmpegExperimental, hasBFrames, forceClosedGop = false }: {
+  const cutEncodeSmartPart = useCallback(async ({ cutFrom, cutTo, outPath, outFormat, videoCodec, videoBitrate, videoTimebase, allFilesMeta, copyFileStreams, videoStreamIndex, sourceVideoStream, ffmpegExperimental, hasBFrames, forceClosedGop = false, fadeInDuration, fadeOutDuration, lastFrameOffset }: {
     cutFrom: number,
     cutTo: number,
     outPath: string,
@@ -503,8 +503,14 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
     ffmpegExperimental: boolean,
     hasBFrames: number | undefined,
     forceClosedGop?: boolean | undefined,
+    fadeInDuration?: number | undefined,
+    fadeOutDuration?: number | undefined,
+    lastFrameOffset?: number | undefined,
   }) => {
     invariant(filePath != null);
+    if (((fadeInDuration ?? 0) > 0 || (fadeOutDuration ?? 0) > 0) && !forceClosedGop) {
+      throw new Error('Source-preserving fade effects require a closed GOP boundary encode');
+    }
 
     function getVideoArgs({ streamIndex, outputIndex }: { streamIndex: number, outputIndex: number }) {
       if (streamIndex !== videoStreamIndex) return undefined;
@@ -515,8 +521,12 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
       ];
 
       if (forceClosedGop) {
-        const duration = formatFfmpegNumber(cutTo - cutFrom);
-        args.push(`-filter:${outputIndex}`, `setpts=PTS-STARTPTS,trim=duration=${duration},setpts=PTS-STARTPTS`);
+        args.push(`-filter:${outputIndex}`, buildSourcePreservingVideoFilter({
+          duration: cutTo - cutFrom,
+          ...(fadeInDuration != null ? { fadeInDuration } : {}),
+          ...(fadeOutDuration != null ? { fadeOutDuration } : {}),
+          ...(lastFrameOffset != null ? { lastFrameOffset } : {}),
+        }));
 
         if (sourceVideoStream?.pix_fmt != null) args.push(`-pix_fmt:${outputIndex}`, sourceVideoStream.pix_fmt);
         const x264Profile = ({
@@ -1220,8 +1230,8 @@ function useFfmpegOperations({ filePath, treatInputFileModifiedTimeAsStart, trea
         ]);
         return buildSourcePreservingSegmentPlan({
           span: { start, end },
-          nextKeyframeAtOrAfterStart: relativeTime(nextKeyframeAbsolute),
-          previousKeyframeAtOrBeforeEnd: relativeTime(previousKeyframeAbsolute),
+          nextSafeIdrAtOrAfterCopyStart: relativeTime(nextKeyframeAbsolute),
+          previousSafeIdrAtOrBeforeCopyEnd: relativeTime(previousKeyframeAbsolute),
           sourceDuration: effectiveFileDuration,
         });
       }, { concurrency: 1 });
