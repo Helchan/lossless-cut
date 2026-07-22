@@ -1,0 +1,55 @@
+.root {
+  display: flex;
+  align-items: center;
+  gap: .35em;
+  min-width: 0;
+  margin-left: .55em;
+  font-size: .75em;
+  white-space: nowrap;
+}
+
+.checkbox {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.checkbox > div {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.checkbox label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.durationGroup {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: .15em;
+}
+
+.durationInput {
+  box-sizing: border-box;
+  width: 3.4em;
+  padding: .1em .2em;
+  border: 1px solid var(--gray-7);
+  border-radius: .25em;
+  outline: none;
+  background: var(--gray-3);
+  color: var(--gray-12);
+  font: inherit;
+  text-align: right;
+}
+
+.durationInput:focus {
+  border-color: var(--gray-9);
+}
+
+.unit {
+  color: var(--gray-10);
+}

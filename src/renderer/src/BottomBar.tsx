@@ -19,6 +19,7 @@ import type { FormatTimecode, GetFrameCount, ParseTimecode, StateSegment } from 
 import type { WaveformMode } from '../../common/types';
 import type { Frame } from './ffmpeg';
 import mainApi from './mainApi';
+import MergeTransitionControl from './components/MergeTransitionControl';
 
 // eslint-disable-next-line react/display-name
 const CutTimeInput = memo(({ disabled, darkMode, cutTime, setCutTime, startTimeOffset, seekAbs, currentCutSeg, isStart, formatTimecode, parseTimecode }: {
@@ -338,8 +339,9 @@ export function BottomBarFirstRow({ controls, leadingControls, trailingControls 
       className="no-user-select"
       style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto minmax(0, 1fr)', alignItems: 'center', gap: '.5em', opacity: isFileOpened ? 1 : 0.5, width: '100%' }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', minWidth: 0, overflow: 'hidden' }}>
         {leadingControls}
+        <MergeTransitionControl />
 
         {hasAudio && (
           <GiSoundWaves
