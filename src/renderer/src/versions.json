@@ -24,6 +24,10 @@
   },
   {
     "version": "3.69.0",
-    "highlightsMd": "- Add lossless cropping & aspect ratio override via bitstream and container metadata\n- Alow shifting tracks for each file (`-itsoffset`)\n- Add \"decimate video\" tool to filter away all non-keyframes\n- Move timecode out of timeline and make it copy-able\n- Add new \"opposing\" align mode #2654\n- Add FFmpeg `-hwaccel auto` setting for hardware acceleration of certain operations\n- Show keyboard shortcuts inside button tooltips in UI\n- Warn if trying to cut with too few keyframes around cutpoint\n- Changed: New, advanced output directory selector\n- Changed: Preserve chapters when merging files that already have chapters\n- Changed: Don't merge adjacent segments in combineOverlappingSegments\n- Changed: Don't transfer segment name when filling gaps\n- Changed: Always scroll *up* to zoom in\n- Many other improvements and fixes\n"
+    "highlightsMd": "- Add lossless cropping & aspect ratio override via bitstream and container metadata\n- Alow shifting tracks for each file (`-itsoffset`)\n- Add \"decimate video\" tool to filter away all non-keyframes\n- Move timecode out of timeline and make it copy-able\n- Add new \"opposing\" align mode\n- Add FFmpeg `-hwaccel auto` setting for hardware acceleration of certain operations\n- Show keyboard shortcuts inside button tooltips in UI\n- Warn if trying to cut with too few keyframes around cutpoint\n- Changed: New, advanced output directory selector\n- Changed: Preserve chapters when merging files that already have chapters\n- Changed: Don't merge adjacent segments in combineOverlappingSegments\n- Changed: Don't transfer segment name when filling gaps\n- Changed: Always scroll *up* to zoom in\n- Many other improvements and fixes\n"
+  },
+  {
+    "version": "4.0.7",
+    "highlightsMd": "- Add a configurable fade-through-black transition at merged cut points\n- Keep merged duration and audio timing exact while re-encoding only required video boundary regions\n"
   }
 ]
