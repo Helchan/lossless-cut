@@ -1,9 +1,13 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
 import { useState } from 'react';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { MergeTransitionControlView } from './MergeTransitionControl';
+
+
+const controlCss = readFileSync('src/renderer/src/components/MergeTransitionControl.module.css', 'utf8');
 
 
 vi.mock('react-i18next', () => ({
@@ -87,5 +91,18 @@ describe('MergeTransitionControlView', () => {
     expect(input.getAttribute('step')).toBe('0.01');
     expect(input.hasAttribute('min')).toBe(false);
     expect((input as HTMLInputElement).validity.stepMismatch).toBe(false);
+  });
+
+  it('keeps the compact duration text clear of Chromium native spinner space', () => {
+    const spinnerRule = controlCss.match(/::-webkit-inner-spin-button[^}]*\{([^}]*)\}/s)?.[1];
+
+    expect(spinnerRule).toMatch(/(?:-webkit-)?appearance:\s*none/);
+  });
+
+  it('reserves enough input width for the complete default duration', () => {
+    const inputRule = controlCss.match(/\.durationInput\s*\{([^}]*)\}/s)?.[1];
+    const widthEm = Number(inputRule?.match(/\bwidth:\s*([\d.]+)em/)?.[1]);
+
+    expect(widthEm).toBeGreaterThanOrEqual(4.5);
   });
 });

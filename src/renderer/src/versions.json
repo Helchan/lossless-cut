@@ -29,5 +29,9 @@
   {
     "version": "4.0.7",
     "highlightsMd": "- Add a configurable fade-through-black transition at merged cut points\n- Keep merged duration and audio timing exact while re-encoding only required video boundary regions\n"
+  },
+  {
+    "version": "4.0.8",
+    "highlightsMd": "- Fix the fade-through-black transition duration field so the full value remains visible\n"
   }
 ]

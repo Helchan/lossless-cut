@@ -10,6 +10,7 @@ const safeLicenses: Record<string, true | string[]> = {
   Unlicense: true,
   WTFPL: true,
   '0BSD': true,
+  'MIT-0': true,
 
   // Permissive licenses: These impose minimal requirements (mostly attribution + license notice). You can generally use them interchangeably in commercial and proprietary software.
   MIT: true,

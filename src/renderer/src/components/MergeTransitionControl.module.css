@@ -35,7 +35,7 @@
 
 .durationInput {
   box-sizing: border-box;
-  width: 3.4em;
+  width: 4.5em;
   padding: .1em .2em;
   border: 1px solid var(--gray-7);
   border-radius: .25em;
@@ -48,6 +48,11 @@
 
 .durationInput:focus {
   border-color: var(--gray-9);
+}
+
+.durationInput::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
 }
 
 .unit {
